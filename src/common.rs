@@ -17,7 +17,8 @@ use hbb_common::{
     bail, base64,
     bytes::Bytes,
     config::{
-        self, keys, Config, LocalConfig, PeerConfig, CONNECT_TIMEOUT, READ_TIMEOUT, RENDEZVOUS_PORT,
+        self, keys, Config, LocalConfig, PeerConfig, CONNECT_TIMEOUT, READ_TIMEOUT, RELAY_PORT,
+        RENDEZVOUS_PORT,
     },
     futures::future::join_all,
     futures_util::future::poll_fn,

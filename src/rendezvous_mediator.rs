@@ -437,10 +437,11 @@ impl RendezvousMediator {
         if last.0 == addr && last.1.elapsed().as_millis() < 100 {
             return Ok(());
         }
+        let relay_server = self.get_relay_server(rr.relay_server);
 
         self.create_relay(
             rr.socket_addr.into(),
-            rr.relay_server,
+            relay_server,
             rr.uuid,
             server,
             rr.secure,

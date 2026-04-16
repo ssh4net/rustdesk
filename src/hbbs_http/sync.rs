@@ -24,10 +24,22 @@ fn is_protected_remote_option(key: &str) -> bool {
         keys::OPTION_CUSTOM_RENDEZVOUS_SERVER
             | keys::OPTION_API_SERVER
             | keys::OPTION_RELAY_SERVER
+            | keys::OPTION_ICE_SERVERS
+            | keys::OPTION_ALLOW_WEBSOCKET
+            | keys::OPTION_ALLOW_INSECURE_TLS_FALLBACK
+            | keys::OPTION_ALLOW_HTTPS_21114
+            | keys::OPTION_USE_RAW_TCP_FOR_API
+            | keys::OPTION_DIRECT_SERVER
+            | keys::OPTION_DIRECT_ACCESS_PORT
             | keys::OPTION_DIRECT_ACCESS_PAIRING_PASSPHRASE
             | keys::OPTION_PEER_PAIRING_PASSPHRASE
             | keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST
             | keys::OPTION_LAN_DISCOVERY_MODE
+            | keys::OPTION_ENABLE_TRUSTED_DEVICES
+            | keys::OPTION_APPROVE_MODE
+            | keys::OPTION_VERIFICATION_METHOD
+            | keys::OPTION_WHITELIST
+            | keys::OPTION_ALLOW_REMOTE_CONFIG_MODIFICATION
             | keys::OPTION_KEY
             | "rendezvous-servers"
     )
@@ -345,6 +357,17 @@ mod tests {
         assert!(is_protected_remote_option(
             keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST
         ));
+        assert!(is_protected_remote_option(keys::OPTION_ICE_SERVERS));
+        assert!(is_protected_remote_option(keys::OPTION_ALLOW_WEBSOCKET));
+        assert!(is_protected_remote_option(
+            keys::OPTION_ALLOW_INSECURE_TLS_FALLBACK
+        ));
+        assert!(is_protected_remote_option(keys::OPTION_DIRECT_SERVER));
+        assert!(is_protected_remote_option(keys::OPTION_DIRECT_ACCESS_PORT));
+        assert!(is_protected_remote_option(keys::OPTION_ENABLE_TRUSTED_DEVICES));
+        assert!(is_protected_remote_option(keys::OPTION_APPROVE_MODE));
+        assert!(is_protected_remote_option(keys::OPTION_VERIFICATION_METHOD));
+        assert!(is_protected_remote_option(keys::OPTION_WHITELIST));
     }
 
     #[test]
@@ -359,6 +382,27 @@ mod tests {
             keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST.to_owned(),
             "N".to_owned(),
         );
+        Config::set_option(
+            keys::OPTION_ICE_SERVERS.to_owned(),
+            "turn:trusted.example.com".to_owned(),
+        );
+        Config::set_option(keys::OPTION_ALLOW_WEBSOCKET.to_owned(), "N".to_owned());
+        Config::set_option(
+            keys::OPTION_ALLOW_INSECURE_TLS_FALLBACK.to_owned(),
+            "N".to_owned(),
+        );
+        Config::set_option(keys::OPTION_DIRECT_SERVER.to_owned(), "N".to_owned());
+        Config::set_option(keys::OPTION_DIRECT_ACCESS_PORT.to_owned(), "21118".to_owned());
+        Config::set_option(
+            keys::OPTION_ENABLE_TRUSTED_DEVICES.to_owned(),
+            "Y".to_owned(),
+        );
+        Config::set_option(keys::OPTION_APPROVE_MODE.to_owned(), "password".to_owned());
+        Config::set_option(
+            keys::OPTION_VERIFICATION_METHOD.to_owned(),
+            "use-temporary-password".to_owned(),
+        );
+        Config::set_option(keys::OPTION_WHITELIST.to_owned(), "127.0.0.1".to_owned());
 
         handle_config_options(HashMap::from([
             (
@@ -368,6 +412,30 @@ mod tests {
             (
                 keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST.to_owned(),
                 "".to_owned(),
+            ),
+            (
+                keys::OPTION_ICE_SERVERS.to_owned(),
+                "turn:attacker.example.com".to_owned(),
+            ),
+            (keys::OPTION_ALLOW_WEBSOCKET.to_owned(), "Y".to_owned()),
+            (
+                keys::OPTION_ALLOW_INSECURE_TLS_FALLBACK.to_owned(),
+                "Y".to_owned(),
+            ),
+            (keys::OPTION_DIRECT_SERVER.to_owned(), "Y".to_owned()),
+            (keys::OPTION_DIRECT_ACCESS_PORT.to_owned(), "29999".to_owned()),
+            (
+                keys::OPTION_ENABLE_TRUSTED_DEVICES.to_owned(),
+                "N".to_owned(),
+            ),
+            (keys::OPTION_APPROVE_MODE.to_owned(), "click".to_owned()),
+            (
+                keys::OPTION_VERIFICATION_METHOD.to_owned(),
+                "use-permanent-password".to_owned(),
+            ),
+            (
+                keys::OPTION_WHITELIST.to_owned(),
+                "10.0.0.1".to_owned(),
             ),
         ]));
 
@@ -379,6 +447,27 @@ mod tests {
             Config::get_option(keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST),
             "N"
         );
+        assert_eq!(
+            Config::get_option(keys::OPTION_ICE_SERVERS),
+            "turn:trusted.example.com"
+        );
+        assert_eq!(Config::get_option(keys::OPTION_ALLOW_WEBSOCKET), "N");
+        assert_eq!(
+            Config::get_option(keys::OPTION_ALLOW_INSECURE_TLS_FALLBACK),
+            "N"
+        );
+        assert_eq!(Config::get_option(keys::OPTION_DIRECT_SERVER), "N");
+        assert_eq!(Config::get_option(keys::OPTION_DIRECT_ACCESS_PORT), "21118");
+        assert_eq!(
+            Config::get_option(keys::OPTION_ENABLE_TRUSTED_DEVICES),
+            "Y"
+        );
+        assert_eq!(Config::get_option(keys::OPTION_APPROVE_MODE), "password");
+        assert_eq!(
+            Config::get_option(keys::OPTION_VERIFICATION_METHOD),
+            "use-temporary-password"
+        );
+        assert_eq!(Config::get_option(keys::OPTION_WHITELIST), "127.0.0.1");
 
         Config::set_options(saved);
     }
