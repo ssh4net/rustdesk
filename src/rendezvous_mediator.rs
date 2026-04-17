@@ -596,11 +596,34 @@ impl RendezvousMediator {
         if last.0 == peer_addr && last.1.elapsed().as_millis() < 100 {
             return Ok(());
         }
+        if !crate::common::is_safe_rendezvous_peer_hint(peer_addr, false) {
+            log::warn!(
+                "Ignoring unsafe rendezvous-provided direct peer address {} and falling back to relay",
+                peer_addr
+            );
+            let relay_server = self.get_relay_server(ph.relay_server);
+            let uuid = Uuid::new_v4().to_string();
+            return self
+                .create_relay(
+                    ph.socket_addr.into(),
+                    relay_server,
+                    uuid,
+                    server,
+                    true,
+                    true,
+                    Default::default(),
+                    ph.control_permissions.into_option(),
+                )
+                .await;
+        }
         let peer_addr_v6 = hbb_common::AddrMangle::decode(&ph.socket_addr_v6);
         let relay = use_ws() || Config::is_proxy() || ph.force_relay;
         let mut socket_addr_v6 = Default::default();
         let control_permissions = ph.control_permissions.into_option();
-        if peer_addr_v6.port() > 0 && !relay {
+        if peer_addr_v6.port() > 0
+            && !relay
+            && crate::common::is_safe_rendezvous_peer_hint(peer_addr_v6, false)
+        {
             socket_addr_v6 = start_ipv6(
                 peer_addr_v6,
                 peer_addr,
@@ -608,6 +631,11 @@ impl RendezvousMediator {
                 control_permissions.clone(),
             )
             .await;
+        } else if peer_addr_v6.port() > 0 && !relay {
+            log::warn!(
+                "Ignoring unsafe rendezvous-provided IPv6 direct peer address {}",
+                peer_addr_v6
+            );
         }
         let relay_server = self.get_relay_server(ph.relay_server);
         // for ensure, websocket go relay directly

@@ -1330,6 +1330,41 @@ fn is_usable_direct_access_ip(ip: IpAddr) -> bool {
     }
 }
 
+fn is_safe_rendezvous_peer_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            !ip.is_loopback()
+                && !ip.is_unspecified()
+                && !ip.is_multicast()
+                && !ip.is_link_local()
+                && ip.octets() != [255, 255, 255, 255]
+        }
+        IpAddr::V6(ip) => {
+            !ip.is_loopback()
+                && !ip.is_unspecified()
+                && !ip.is_multicast()
+                && !ip.is_unicast_link_local()
+        }
+    }
+}
+
+fn is_safe_local_rendezvous_peer_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => ip.is_private(),
+        IpAddr::V6(ip) => (ip.segments()[0] & 0xfe00) == 0xfc00,
+    }
+}
+
+pub fn is_safe_rendezvous_peer_hint(addr: SocketAddr, is_local_hint: bool) -> bool {
+    if addr.port() == 0 {
+        return false;
+    }
+    if is_local_hint {
+        return is_safe_local_rendezvous_peer_ip(addr.ip());
+    }
+    is_safe_rendezvous_peer_ip(addr.ip())
+}
+
 #[inline]
 fn format_direct_access_endpoint(ip: IpAddr, port: i32) -> String {
     match ip {
@@ -4434,5 +4469,37 @@ mod tests {
             format_direct_access_endpoint(IpAddr::V6("fd00::5".parse().unwrap()), 21118),
             "[fd00::5]:21118"
         );
+    }
+
+    #[test]
+    fn test_is_safe_rendezvous_peer_hint_rejects_unsafe_and_requires_local_ranges() {
+        assert!(is_safe_rendezvous_peer_hint(
+            "203.0.113.10:21116".parse().unwrap(),
+            false
+        ));
+        assert!(!is_safe_rendezvous_peer_hint(
+            "127.0.0.1:21116".parse().unwrap(),
+            false
+        ));
+        assert!(!is_safe_rendezvous_peer_hint(
+            "169.254.1.20:21116".parse().unwrap(),
+            false
+        ));
+        assert!(is_safe_rendezvous_peer_hint(
+            "192.168.1.20:21116".parse().unwrap(),
+            true
+        ));
+        assert!(!is_safe_rendezvous_peer_hint(
+            "203.0.113.10:21116".parse().unwrap(),
+            true
+        ));
+        assert!(is_safe_rendezvous_peer_hint(
+            "[fd00::20]:21116".parse().unwrap(),
+            true
+        ));
+        assert!(!is_safe_rendezvous_peer_hint(
+            "[2001:db8::20]:21116".parse().unwrap(),
+            true
+        ));
     }
 }

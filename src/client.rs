@@ -520,9 +520,20 @@ impl Client {
                                 &ph.relay_server,
                             );
                             peer_addr = AddrMangle::decode(&ph.socket_addr);
+                            if !crate::common::is_safe_rendezvous_peer_hint(
+                                peer_addr,
+                                is_local,
+                            ) {
+                                log::warn!(
+                                    "Ignoring unsafe rendezvous-provided {} peer address {}",
+                                    if is_local { "local" } else { "direct" },
+                                    peer_addr
+                                );
+                                peer_addr.set_port(0);
+                            }
                             feedback = ph.feedback;
                             let s = udp.0.take();
-                            if ph.is_udp && s.is_some() {
+                            if ph.is_udp && peer_addr.port() > 0 && s.is_some() {
                                 if let Some(s) = s {
                                     allow_err!(s.connect(peer_addr).await);
                                     udp.0 = Some(s);
@@ -531,11 +542,16 @@ impl Client {
                             let s = ipv6.0.take();
                             if !ph.socket_addr_v6.is_empty() && s.is_some() {
                                 let addr = AddrMangle::decode(&ph.socket_addr_v6);
-                                if addr.port() > 0 {
+                                if crate::common::is_safe_rendezvous_peer_hint(addr, is_local) {
                                     if let Some(s) = s {
                                         allow_err!(s.connect(addr).await);
                                         ipv6.0 = Some(s);
                                     }
+                                } else if addr.port() > 0 {
+                                    log::warn!(
+                                        "Ignoring unsafe rendezvous-provided IPv6 peer address {}",
+                                        addr
+                                    );
                                 }
                             }
                             log::info!("{} Hole Punched {} = {}", punch_type, peer, peer_addr);
@@ -552,11 +568,16 @@ impl Client {
                         let mut connect_futures = Vec::new();
                         if let Some(s) = ipv6.0 {
                             let addr = AddrMangle::decode(&rr.socket_addr_v6);
-                            if addr.port() > 0 {
+                            if crate::common::is_safe_rendezvous_peer_hint(addr, false) {
                                 if s.connect(addr).await.is_ok() {
                                     connect_futures
                                         .push(udp_nat_connect(s, "IPv6", CONNECT_TIMEOUT).boxed());
                                 }
+                            } else if addr.port() > 0 {
+                                log::warn!(
+                                    "Ignoring unsafe rendezvous-provided IPv6 relay address {}",
+                                    addr
+                                );
                             }
                         }
                         signed_id_pk = rr.pk().into();
@@ -714,14 +735,21 @@ impl Client {
         let start = std::time::Instant::now();
 
         let mut connect_futures = Vec::new();
-        let fut = connect_tcp_local(peer, Some(local_addr), connect_timeout);
-        connect_futures.push(
-            async move {
-                let conn = fut.await?;
-                Ok((conn, None, "TCP"))
-            }
-            .boxed(),
-        );
+        if crate::common::is_safe_rendezvous_peer_hint(peer, is_local) {
+            let fut = connect_tcp_local(peer, Some(local_addr), connect_timeout);
+            connect_futures.push(
+                async move {
+                    let conn = fut.await?;
+                    Ok((conn, None, "TCP"))
+                }
+                .boxed(),
+            );
+        } else {
+            log::warn!(
+                "Skipping direct TCP attempt for missing or unsafe rendezvous peer hint {}",
+                peer
+            );
+        }
         if let Some(udp_socket_nat) = udp_socket_nat {
             connect_futures.push(udp_nat_connect(udp_socket_nat, "UDP", connect_timeout).boxed());
         }
@@ -729,9 +757,13 @@ impl Client {
             connect_futures.push(udp_nat_connect(udp_socket_v6, "IPv6", connect_timeout).boxed());
         }
         // Run all connection attempts concurrently, return the first successful one
-        let (mut conn, kcp, mut typ) = match select_ok(connect_futures).await {
-            Ok(conn) => (Ok(conn.0 .0), conn.0 .1, conn.0 .2),
-            Err(e) => (Err(e), None, ""),
+        let (mut conn, kcp, mut typ) = if connect_futures.is_empty() {
+            (Err(anyhow!("No trusted direct path available")), None, "")
+        } else {
+            match select_ok(connect_futures).await {
+                Ok(conn) => (Ok(conn.0 .0), conn.0 .1, conn.0 .2),
+                Err(e) => (Err(e), None, ""),
+            }
         };
 
         let mut direct = !conn.is_err();
