@@ -21,6 +21,7 @@ mod gu;
 mod fr;
 mod ge;
 mod he;
+mod hi;
 mod hr;
 mod hu;
 mod id;
@@ -96,6 +97,7 @@ pub const LANGS: &[(&str, &str)] = &[
     ("ta", "தமிழ்"),
     ("ge", "ქართული"),
     ("fi", "Suomi"),
+    ("hi", "हिंदी"),
     ("gu", "ગુજરાતી"),
 ];
 
@@ -175,6 +177,7 @@ pub fn translate_locale(name: String, locale: &str) -> String {
         "sc" => sc::T.deref(),
         "ta" => ta::T.deref(),
         "ge" => ge::T.deref(),
+        "hi" => hi::T.deref(),
         "gu" => gu::T.deref(),
         _ => en::T.deref(),
     };
