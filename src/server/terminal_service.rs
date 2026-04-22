@@ -570,7 +570,11 @@ fn try_send_output(
             false
         }
         Err(mpsc::TrySendError::Disconnected(_)) => {
-            log::debug!("Terminal {}{} output channel disconnected", terminal_id, label);
+            log::debug!(
+                "Terminal {}{} output channel disconnected",
+                terminal_id,
+                label
+            );
             true
         }
     }

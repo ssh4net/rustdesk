@@ -520,10 +520,7 @@ impl Client {
                                 &ph.relay_server,
                             );
                             peer_addr = AddrMangle::decode(&ph.socket_addr);
-                            if !crate::common::is_safe_rendezvous_peer_hint(
-                                peer_addr,
-                                is_local,
-                            ) {
+                            if !crate::common::is_safe_rendezvous_peer_hint(peer_addr, is_local) {
                                 log::warn!(
                                     "Ignoring unsafe rendezvous-provided {} peer address {}",
                                     if is_local { "local" } else { "direct" },
@@ -4343,11 +4340,7 @@ pub mod peer_online {
 #[cfg(test)]
 mod security_tests {
     use super::*;
-    use hbb_common::{
-        config::keys,
-        tcp,
-        tokio::net::TcpListener,
-    };
+    use hbb_common::{config::keys, tcp, tokio::net::TcpListener};
     use std::sync::Mutex;
 
     static TEST_CLIENT_SECURITY_LOCK: Mutex<()> = Mutex::new(());
@@ -4486,15 +4479,16 @@ mod security_tests {
             let local_addr = socket.local_addr()?;
             let mut stream = Stream::from(socket, local_addr);
             let (box_pk, box_sk) = box_::gen_keypair();
-            let pairing_salt =
-                pairing_passphrase
-                    .as_ref()
-                    .map(|_| crate::common::create_direct_pairing_salt());
+            let pairing_salt = pairing_passphrase
+                .as_ref()
+                .map(|_| crate::common::create_direct_pairing_salt());
             let signed_id = match pairing_salt {
                 Some(salt) => crate::common::create_direct_signed_id_with_pairing(
                     &peer_id, box_pk.0, &sign_pk, &sign_sk, salt,
                 ),
-                None => crate::common::create_direct_signed_id(&peer_id, box_pk.0, &sign_pk, &sign_sk),
+                None => {
+                    crate::common::create_direct_signed_id(&peer_id, box_pk.0, &sign_pk, &sign_sk)
+                }
             };
             let mut msg_out = Message::new();
             msg_out.set_signed_id(SignedId {
@@ -4516,11 +4510,8 @@ mod security_tests {
                     &public_key.symmetric_value,
                     pairing_salt.is_some(),
                 )?;
-            let key = tcp::Encrypt::decode(
-                &symmetric_value,
-                &public_key.asymmetric_value,
-                &box_sk,
-            )?;
+            let key =
+                tcp::Encrypt::decode(&symmetric_value, &public_key.asymmetric_value, &box_sk)?;
             if let (Some(pairing_passphrase), Some(pairing_salt)) =
                 (pairing_passphrase.as_ref(), pairing_salt)
             {
@@ -4569,21 +4560,21 @@ mod security_tests {
     ) -> ResultType<(String, Vec<u8>, tokio::task::JoinHandle<ResultType<()>>)> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
-        let signed_id_pk = create_rendezvous_signed_peer_binding(&peer_id, &sign_pk, &rendezvous_sk);
+        let signed_id_pk =
+            create_rendezvous_signed_peer_binding(&peer_id, &sign_pk, &rendezvous_sk);
         let handle = tokio::spawn(async move {
             let (socket, _) = listener.accept().await?;
             socket.set_nodelay(true).ok();
             let local_addr = socket.local_addr()?;
             let mut stream = Stream::from(socket, local_addr);
             let (box_pk, box_sk) = box_::gen_keypair();
-            let pairing_salt =
-                pairing_passphrase
-                    .as_ref()
-                    .map(|_| crate::common::create_direct_pairing_salt());
+            let pairing_salt = pairing_passphrase
+                .as_ref()
+                .map(|_| crate::common::create_direct_pairing_salt());
             let signed_id = match pairing_salt {
-                Some(salt) => {
-                    crate::common::create_secure_signed_id_with_pairing(&peer_id, box_pk.0, &sign_sk, salt)
-                }
+                Some(salt) => crate::common::create_secure_signed_id_with_pairing(
+                    &peer_id, box_pk.0, &sign_sk, salt,
+                ),
                 None => sign::sign(
                     &IdPk {
                         id: peer_id.clone(),
@@ -4616,11 +4607,8 @@ mod security_tests {
                     &public_key.symmetric_value,
                     pairing_salt.is_some(),
                 )?;
-            let key = tcp::Encrypt::decode(
-                &symmetric_value,
-                &public_key.asymmetric_value,
-                &box_sk,
-            )?;
+            let key =
+                tcp::Encrypt::decode(&symmetric_value, &public_key.asymmetric_value, &box_sk)?;
             if let (Some(pairing_passphrase), Some(pairing_salt)) =
                 (pairing_passphrase.as_ref(), pairing_salt)
             {
@@ -4683,10 +4671,15 @@ mod security_tests {
             .await
             .unwrap_err()
             .to_string();
-        assert!(err.contains("first direct secure contact requires a trusted peer key or local pairing passphrase"));
+        assert!(err.contains(
+            "first direct secure contact requires a trusted peer key or local pairing passphrase"
+        ));
         handle.abort();
         PeerConfig::remove(&peer_config_id);
-        Config::set_option(keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST.to_owned(), saved_allow);
+        Config::set_option(
+            keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST.to_owned(),
+            saved_allow,
+        );
     }
 
     #[tokio::test]
@@ -4713,11 +4706,15 @@ mod security_tests {
         let mut conn = connect_tcp_local(addr.clone(), None, CONNECT_TIMEOUT)
             .await
             .unwrap();
-        let pk = Client::secure_direct_connection(&addr, &peer_config_id, &mut conn, interface.clone())
-            .await
-            .unwrap();
+        let pk =
+            Client::secure_direct_connection(&addr, &peer_config_id, &mut conn, interface.clone())
+                .await
+                .unwrap();
         assert_eq!(pk, trusted_sign_pk.0.to_vec());
-        assert!(crate::common::has_trusted_peer_signing_key(&peer_config_id, &trusted_sign_pk.0).unwrap());
+        assert!(
+            crate::common::has_trusted_peer_signing_key(&peer_config_id, &trusted_sign_pk.0)
+                .unwrap()
+        );
         handle.await.unwrap().unwrap();
 
         let (changed_sign_pk, changed_sign_sk) = sign::gen_keypair();
@@ -4745,7 +4742,10 @@ mod security_tests {
         changed_handle.abort();
 
         PeerConfig::remove(&peer_config_id);
-        Config::set_option(keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST.to_owned(), saved_allow);
+        Config::set_option(
+            keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST.to_owned(),
+            saved_allow,
+        );
     }
 
     #[tokio::test]
@@ -4762,15 +4762,10 @@ mod security_tests {
             keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST.to_owned(),
             "N".to_owned(),
         );
-        let (addr, signed_id_pk, handle) = spawn_secure_handshake_peer(
-            peer_id.clone(),
-            sign_pk.0,
-            sign_sk,
-            rs_sk,
-            None,
-        )
-        .await
-        .unwrap();
+        let (addr, signed_id_pk, handle) =
+            spawn_secure_handshake_peer(peer_id.clone(), sign_pk.0, sign_sk, rs_sk, None)
+                .await
+                .unwrap();
         let mut conn = connect_tcp_local(addr.clone(), None, CONNECT_TIMEOUT)
             .await
             .unwrap();
@@ -4786,11 +4781,16 @@ mod security_tests {
         .await
         .unwrap_err()
         .to_string();
-        assert!(err.contains("first secure contact requires a trusted peer key or peer pairing passphrase"));
+        assert!(err.contains(
+            "first secure contact requires a trusted peer key or peer pairing passphrase"
+        ));
         handle.abort();
 
         PeerConfig::remove(&peer_config_id);
-        Config::set_option(keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST.to_owned(), saved_allow);
+        Config::set_option(
+            keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST.to_owned(),
+            saved_allow,
+        );
     }
 
     #[tokio::test]
@@ -4832,7 +4832,10 @@ mod security_tests {
         .unwrap()
         .unwrap();
         assert_eq!(pk, trusted_sign_pk.0.to_vec());
-        assert!(crate::common::has_trusted_peer_signing_key(&peer_config_id, &trusted_sign_pk.0).unwrap());
+        assert!(
+            crate::common::has_trusted_peer_signing_key(&peer_config_id, &trusted_sign_pk.0)
+                .unwrap()
+        );
         handle.await.unwrap().unwrap();
 
         let (changed_sign_pk, changed_sign_sk) = sign::gen_keypair();
@@ -4864,7 +4867,10 @@ mod security_tests {
         changed_handle.abort();
 
         PeerConfig::remove(&peer_config_id);
-        Config::set_option(keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST.to_owned(), saved_allow);
+        Config::set_option(
+            keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST.to_owned(),
+            saved_allow,
+        );
     }
 }
 

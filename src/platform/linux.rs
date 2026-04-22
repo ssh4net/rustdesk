@@ -2150,7 +2150,10 @@ pub fn clear_gnome_shortcuts_inhibitor_permission() -> ResultType<()> {
                 || err_name == "org.freedesktop.DBus.Error.UnknownObject"
                 || err_name == "org.freedesktop.DBus.Error.ServiceUnknown"
             {
-                log::info!("GNOME shortcuts inhibitor permission was not set ({})", err_name);
+                log::info!(
+                    "GNOME shortcuts inhibitor permission was not set ({})",
+                    err_name
+                );
                 Ok(())
             } else {
                 bail!("Failed to clear permission: {}", e)

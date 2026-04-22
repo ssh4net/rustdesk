@@ -602,7 +602,10 @@ pub mod service {
             }
             DataKeyboard::KeyDown(enigo::Key::Raw(code)) => {
                 if *code < 8 {
-                    log::error!("Invalid Raw keycode {} (must be >= 8 due to XKB offset), skipping", code);
+                    log::error!(
+                        "Invalid Raw keycode {} (must be >= 8 due to XKB offset), skipping",
+                        code
+                    );
                 } else {
                     let down_event = InputEvent::new(EventType::KEY, *code - 8, 1);
                     allow_err!(keyboard.emit(&[down_event]));
@@ -610,7 +613,10 @@ pub mod service {
             }
             DataKeyboard::KeyUp(enigo::Key::Raw(code)) => {
                 if *code < 8 {
-                    log::error!("Invalid Raw keycode {} (must be >= 8 due to XKB offset), skipping", code);
+                    log::error!(
+                        "Invalid Raw keycode {} (must be >= 8 due to XKB offset), skipping",
+                        code
+                    );
                 } else {
                     let up_event = InputEvent::new(EventType::KEY, *code - 8, 0);
                     allow_err!(keyboard.emit(&[up_event]));

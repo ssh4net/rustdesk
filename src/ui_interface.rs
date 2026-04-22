@@ -1722,20 +1722,25 @@ mod tests {
         assert_eq!(peer.get("username").map(String::as_str), Some(""));
         assert_eq!(peer.get("hostname").map(String::as_str), Some(""));
         assert_eq!(peer.get("platform").map(String::as_str), Some(""));
-        let expected_endpoint =
-            format!("192.168.10.5:{}", crate::common::get_direct_access_port());
+        let expected_endpoint = format!("192.168.10.5:{}", crate::common::get_direct_access_port());
         assert_eq!(
             peer.get("endpoint").map(String::as_str),
             Some(expected_endpoint.as_str())
         );
-        assert!(!peer.get("trust_phrase").unwrap_or(&"".to_owned()).is_empty());
+        assert!(!peer
+            .get("trust_phrase")
+            .unwrap_or(&"".to_owned())
+            .is_empty());
 
         crate::common::pin_trusted_peer_signing_key(&peer_id, &peer_id, &sign_pk.0).unwrap();
         let peers = get_lan_peers();
         let peer = &peers[0];
         assert_eq!(peer.get("trusted").map(String::as_str), Some("true"));
         assert_eq!(peer.get("username").map(String::as_str), Some("alice"));
-        assert_eq!(peer.get("hostname").map(String::as_str), Some("workstation"));
+        assert_eq!(
+            peer.get("hostname").map(String::as_str),
+            Some("workstation")
+        );
         assert_eq!(peer.get("platform").map(String::as_str), Some("Linux"));
 
         LanPeers::store(&saved_peers);

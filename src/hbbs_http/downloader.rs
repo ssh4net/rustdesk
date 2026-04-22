@@ -69,7 +69,11 @@ pub fn download_file(
     if let Some(p) = stale_path {
         if p.exists() {
             if let Err(e) = std::fs::remove_file(&p) {
-                log::warn!("Failed to remove stale download file {}: {}", p.display(), e);
+                log::warn!(
+                    "Failed to remove stale download file {}: {}",
+                    p.display(),
+                    e
+                );
             }
         }
     }
@@ -108,7 +112,11 @@ pub fn download_file(
     if let Some(p) = stale_path_after_check {
         if p.exists() {
             if let Err(e) = std::fs::remove_file(&p) {
-                log::warn!("Failed to remove stale download file {}: {}", p.display(), e);
+                log::warn!(
+                    "Failed to remove stale download file {}: {}",
+                    p.display(),
+                    e
+                );
             }
         }
     }

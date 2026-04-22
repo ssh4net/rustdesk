@@ -353,7 +353,9 @@ mod tests {
         assert!(is_protected_remote_option(
             keys::OPTION_DIRECT_ACCESS_PAIRING_PASSPHRASE
         ));
-        assert!(is_protected_remote_option(keys::OPTION_PEER_PAIRING_PASSPHRASE));
+        assert!(is_protected_remote_option(
+            keys::OPTION_PEER_PAIRING_PASSPHRASE
+        ));
         assert!(is_protected_remote_option(
             keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST
         ));
@@ -364,7 +366,9 @@ mod tests {
         ));
         assert!(is_protected_remote_option(keys::OPTION_DIRECT_SERVER));
         assert!(is_protected_remote_option(keys::OPTION_DIRECT_ACCESS_PORT));
-        assert!(is_protected_remote_option(keys::OPTION_ENABLE_TRUSTED_DEVICES));
+        assert!(is_protected_remote_option(
+            keys::OPTION_ENABLE_TRUSTED_DEVICES
+        ));
         assert!(is_protected_remote_option(keys::OPTION_APPROVE_MODE));
         assert!(is_protected_remote_option(keys::OPTION_VERIFICATION_METHOD));
         assert!(is_protected_remote_option(keys::OPTION_WHITELIST));
@@ -392,7 +396,10 @@ mod tests {
             "N".to_owned(),
         );
         Config::set_option(keys::OPTION_DIRECT_SERVER.to_owned(), "N".to_owned());
-        Config::set_option(keys::OPTION_DIRECT_ACCESS_PORT.to_owned(), "21118".to_owned());
+        Config::set_option(
+            keys::OPTION_DIRECT_ACCESS_PORT.to_owned(),
+            "21118".to_owned(),
+        );
         Config::set_option(
             keys::OPTION_ENABLE_TRUSTED_DEVICES.to_owned(),
             "Y".to_owned(),
@@ -405,10 +412,7 @@ mod tests {
         Config::set_option(keys::OPTION_WHITELIST.to_owned(), "127.0.0.1".to_owned());
 
         handle_config_options(HashMap::from([
-            (
-                keys::OPTION_LAN_DISCOVERY_MODE.to_owned(),
-                "off".to_owned(),
-            ),
+            (keys::OPTION_LAN_DISCOVERY_MODE.to_owned(), "off".to_owned()),
             (
                 keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST.to_owned(),
                 "".to_owned(),
@@ -423,7 +427,10 @@ mod tests {
                 "Y".to_owned(),
             ),
             (keys::OPTION_DIRECT_SERVER.to_owned(), "Y".to_owned()),
-            (keys::OPTION_DIRECT_ACCESS_PORT.to_owned(), "29999".to_owned()),
+            (
+                keys::OPTION_DIRECT_ACCESS_PORT.to_owned(),
+                "29999".to_owned(),
+            ),
             (
                 keys::OPTION_ENABLE_TRUSTED_DEVICES.to_owned(),
                 "N".to_owned(),
@@ -433,10 +440,7 @@ mod tests {
                 keys::OPTION_VERIFICATION_METHOD.to_owned(),
                 "use-permanent-password".to_owned(),
             ),
-            (
-                keys::OPTION_WHITELIST.to_owned(),
-                "10.0.0.1".to_owned(),
-            ),
+            (keys::OPTION_WHITELIST.to_owned(), "10.0.0.1".to_owned()),
         ]));
 
         assert_eq!(
@@ -458,10 +462,7 @@ mod tests {
         );
         assert_eq!(Config::get_option(keys::OPTION_DIRECT_SERVER), "N");
         assert_eq!(Config::get_option(keys::OPTION_DIRECT_ACCESS_PORT), "21118");
-        assert_eq!(
-            Config::get_option(keys::OPTION_ENABLE_TRUSTED_DEVICES),
-            "Y"
-        );
+        assert_eq!(Config::get_option(keys::OPTION_ENABLE_TRUSTED_DEVICES), "Y");
         assert_eq!(Config::get_option(keys::OPTION_APPROVE_MODE), "password");
         assert_eq!(
             Config::get_option(keys::OPTION_VERIFICATION_METHOD),

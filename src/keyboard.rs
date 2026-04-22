@@ -39,18 +39,27 @@ static KEYBOARD_HOOKED: AtomicBool = AtomicBool::new(false);
 // macOS: Cmd+G (track G key)
 // Windows/Linux: Ctrl+Alt (track whichever modifier was pressed last)
 // This prevents the exit from retriggering on OS key-repeat.
-#[cfg(all(feature = "flutter", any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+#[cfg(all(
+    feature = "flutter",
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+))]
 static EXIT_SHORTCUT_KEY_DOWN: AtomicBool = AtomicBool::new(false);
 
 // Track whether relative mouse mode is currently active.
 // This is set by Flutter via set_relative_mouse_mode_state() and checked
 // by the rdev grab loop to determine if exit shortcuts should be processed.
-#[cfg(all(feature = "flutter", any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+#[cfg(all(
+    feature = "flutter",
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+))]
 static RELATIVE_MOUSE_MODE_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Set the relative mouse mode state from Flutter.
 /// This is called when entering or exiting relative mouse mode.
-#[cfg(all(feature = "flutter", any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+#[cfg(all(
+    feature = "flutter",
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+))]
 pub fn set_relative_mouse_mode_state(active: bool) {
     RELATIVE_MOUSE_MODE_ACTIVE.store(active, Ordering::SeqCst);
     // Reset exit shortcut state when mode changes to avoid stale state
@@ -341,7 +350,6 @@ fn notify_exit_relative_mouse_mode() {
     flutter::push_session_event(&session_id, "exit_relative_mouse_mode", vec![]);
 }
 
-
 /// Handle relative mouse mode shortcuts in the rdev grab loop.
 /// Returns true if the event should be blocked from being sent to the peer.
 #[cfg(feature = "flutter")]
@@ -388,10 +396,8 @@ fn should_block_relative_mouse_shortcut(key: Key, is_press: bool) -> bool {
     #[cfg(target_os = "macos")]
     let is_tracked_key = key == Key::KeyG;
     #[cfg(not(target_os = "macos"))]
-    let is_tracked_key = key == Key::ControlLeft
-        || key == Key::ControlRight
-        || key == Key::Alt
-        || key == Key::AltGr;
+    let is_tracked_key =
+        key == Key::ControlLeft || key == Key::ControlRight || key == Key::Alt || key == Key::AltGr;
 
     // Block key up if key down was blocked (to avoid orphan key up event on remote).
     // This must be checked before clearing the flag below.

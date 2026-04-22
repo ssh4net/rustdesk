@@ -4391,17 +4391,11 @@ mod tests {
         let saved_legacy = Config::get_option(keys::OPTION_ENABLE_LAN_DISCOVERY);
 
         Config::set_option(keys::OPTION_LAN_DISCOVERY_MODE.to_owned(), "".to_owned());
-        Config::set_option(
-            keys::OPTION_ENABLE_LAN_DISCOVERY.to_owned(),
-            "N".to_owned(),
-        );
+        Config::set_option(keys::OPTION_ENABLE_LAN_DISCOVERY.to_owned(), "N".to_owned());
         assert_eq!(get_lan_discovery_mode(), LAN_DISCOVERY_MODE_OFF);
         assert!(!lan_discovery_is_enabled());
 
-        Config::set_option(
-            keys::OPTION_ENABLE_LAN_DISCOVERY.to_owned(),
-            "".to_owned(),
-        );
+        Config::set_option(keys::OPTION_ENABLE_LAN_DISCOVERY.to_owned(), "".to_owned());
         assert_eq!(get_lan_discovery_mode(), LAN_DISCOVERY_MODE_STANDARD);
         assert!(lan_discovery_is_enabled());
         assert!(lan_discovery_replies_to_unknown_peers());

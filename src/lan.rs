@@ -261,7 +261,12 @@ mod tests {
         let peer_path_id = requester_id.clone();
         let addr = SocketAddr::from(([127, 0, 0, 1], 42311));
 
-        let unknown_ping = make_ping(&requester_id, &requester_sign_pk.0, &requester_sign_sk, &nonce);
+        let unknown_ping = make_ping(
+            &requester_id,
+            &requester_sign_pk.0,
+            &requester_sign_sk,
+            &nonce,
+        );
 
         Config::set_option(
             keys::OPTION_LAN_DISCOVERY_MODE.to_owned(),

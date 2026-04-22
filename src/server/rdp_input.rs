@@ -167,8 +167,7 @@ pub mod client {
                 // ASCII characters: send keysym up if we also sent it on key_down
                 let keysym = char_to_keysym(chr);
                 if can_input_via_keysym(chr, keysym) {
-                    if let Err(e) = send_keysym(keysym, false, self.conn.clone(), &self.session)
-                    {
+                    if let Err(e) = send_keysym(keysym, false, self.conn.clone(), &self.session) {
                         log::error!("Failed to send keysym up: {:?}", e);
                     }
                 }

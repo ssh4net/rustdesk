@@ -351,7 +351,7 @@ pub fn get_supported_privacy_mode_impl() -> Vec<(&'static str, &'static str)> {
     }
     #[cfg(target_os = "macos")]
     {
-        // No translation is intended for privacy_mode_impl_macos_tip as it is a 
+        // No translation is intended for privacy_mode_impl_macos_tip as it is a
         // placeholder for macOS specific privacy mode implementation which currently
         // doesn't provide multiple modes like Windows does.
         vec![(macos::PRIVACY_MODE_IMPL, "privacy_mode_impl_macos_tip")]
