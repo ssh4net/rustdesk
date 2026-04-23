@@ -326,12 +326,6 @@ class _DesktopTabState extends State<DesktopTab>
       tabType == DesktopTabType.install;
 
   _DesktopTabState() : super();
-
-  static RxString tablabelGetter(String peerId) {
-    final alias = bind.mainGetPeerOptionSync(id: peerId, key: 'alias');
-    return RxString(getDesktopTabLabel(peerId, alias));
-  }
-
   @override
   void initState() {
     super.initState();
@@ -432,6 +426,11 @@ class _DesktopTabState extends State<DesktopTab>
   @override
   void onWindowClose() async {
     mainWindowClose() async => await windowManager.hide();
+    mainWindowExit() async {
+      await rustDeskWinManager.closeAllSubWindows();
+      await windowManager.setPreventClose(false);
+      await windowManager.close();
+    }
     notMainWindowClose(WindowController windowController) async {
       if (controller.length != 0) {
         debugPrint("close not empty multiwindow from taskbar");
@@ -466,13 +465,18 @@ class _DesktopTabState extends State<DesktopTab>
 
     await _saveFrame(flush: true);
 
-    // hide window on close
+    // Hide to tray when possible, otherwise exit cleanly.
     if (isMainWindow) {
       if (rustDeskWinManager.getActiveWindows().contains(kMainWindowId)) {
         await rustDeskWinManager.unregisterActiveWindow(kMainWindowId);
       }
+      if (!shouldHideMainWindowOnClose()) {
+        await mainWindowExit();
+        super.onWindowClose();
+        return;
+      }
       // macOS specific workaround, the window is not hiding when in fullscreen.
-      if (isMacOS && await windowManager.isFullScreen()) {
+      else if (isMacOS && await windowManager.isFullScreen()) {
         await windowManager.setFullScreen(false);
         await macOSWindowClose(
           () async => await windowManager.isFullScreen(),

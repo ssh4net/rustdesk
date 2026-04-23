@@ -15,6 +15,7 @@ import 'package:flutter_hbb/desktop/screen/desktop_view_camera_screen.dart';
 import 'package:flutter_hbb/desktop/screen/desktop_port_forward_screen.dart';
 import 'package:flutter_hbb/desktop/screen/desktop_remote_screen.dart';
 import 'package:flutter_hbb/desktop/screen/desktop_terminal_screen.dart';
+import 'package:flutter_hbb/desktop/widgets/first_run_wizard.dart';
 import 'package:flutter_hbb/desktop/widgets/refresh_wrapper.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
@@ -135,6 +136,7 @@ Future<void> initEnv(String appType) async {
 void runMainApp(bool startService) async {
   // register uni links
   await initEnv(kAppTypeMain);
+  await ensureInitialClientDefaults();
   checkUpdate();
   // trigger connection status updater
   await bind.mainCheckConnectStatus();
@@ -169,6 +171,7 @@ void runMainApp(bool startService) async {
       windowManager.focus();
       // Move registration of active main window here to prevent from async visible check.
       rustDeskWinManager.registerActiveWindow(kWindowMainId);
+      _scheduleFirstRunWizard();
     }
     windowManager.setOpacity(1);
     windowManager.setTitle(getWindowName());
@@ -179,6 +182,7 @@ void runMainApp(bool startService) async {
 
 void runMobileApp() async {
   await initEnv(kAppTypeMain);
+  await ensureInitialClientDefaults();
   checkUpdate();
   if (isAndroid) androidChannelInit();
   if (isAndroid) platformFFI.syncAndroidServiceAppDirConfigPath();
@@ -187,6 +191,28 @@ void runMobileApp() async {
   gFFI.userModel.refreshCurrentUser();
   runApp(App());
   await initUniLinks();
+}
+
+bool _firstRunWizardScheduled = false;
+
+void _scheduleFirstRunWizard() {
+  if (_firstRunWizardScheduled) return;
+  _firstRunWizardScheduled = true;
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    unawaited(_showFirstRunWizardIfNeeded());
+  });
+}
+
+Future<void> _showFirstRunWizardIfNeeded() async {
+  if (!await shouldShowWelcomeOnStartup()) {
+    return;
+  }
+  final context = globalKey.currentContext;
+  if (context == null) {
+    _firstRunWizardScheduled = false;
+    return;
+  }
+  await showAndApplyFirstRunWizard(context);
 }
 
 void runMultiWindow(

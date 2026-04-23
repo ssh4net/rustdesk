@@ -211,6 +211,8 @@ const String kOptionKeepAwakeDuringOutgoingSessions =
 
 const String kOptionShowMobileAction = "showMobileActions";
 
+const String kLocalOptionShowWelcomeOnStartup = "show-welcome-on-startup";
+
 const String kUrlActionClose = "close";
 
 const String kTabLabelHomePage = "Home";

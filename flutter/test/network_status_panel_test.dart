@@ -19,7 +19,7 @@ void main() {
     expect(colorForNetworkMode('unexpected'), Colors.grey);
   });
 
-  testWidgets('renders local-only panel with trust and direct access details',
+  testWidgets('renders local-only panel with collapsible trust and direct access details',
       (tester) async {
     await tester.pumpWidget(buildTestApp(
       const NetworkStatusPanelBody(
@@ -35,16 +35,22 @@ void main() {
 
     expect(find.text('Local Only'), findsOneWidget);
     expect(find.text('LAN discovery: Trusted Peers Only'), findsOneWidget);
-    expect(
-      find.text('Trust phrase: amber river solar mint dune cedar'),
-      findsOneWidget,
-    );
-    expect(find.text('Pairing passphrase: Required'), findsOneWidget);
-    expect(
-      find.text('Direct access: 192.168.1.25:21118, 10.8.0.5:21118'),
-      findsOneWidget,
-    );
+    expect(find.text('Trust phrase'), findsOneWidget);
+    expect(find.text('Direct access'), findsOneWidget);
+    expect(find.text('amber river solar mint dune cedar'), findsNothing);
+    expect(find.text('Pairing passphrase: Required'), findsNothing);
+    expect(find.text('192.168.1.25:21118, 10.8.0.5:21118'), findsNothing);
     expect(find.textContaining('Endpoint:'), findsNothing);
+    expect(find.byIcon(Icons.copy_rounded), findsNothing);
+
+    await tester.tap(find.text('Trust phrase'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Direct access'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('amber river solar mint dune cedar'), findsOneWidget);
+    expect(find.text('Pairing passphrase: Required'), findsOneWidget);
+    expect(find.text('192.168.1.25:21118, 10.8.0.5:21118'), findsOneWidget);
     expect(find.byIcon(Icons.copy_rounded), findsNWidgets(2));
   });
 

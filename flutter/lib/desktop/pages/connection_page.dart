@@ -177,7 +177,7 @@ class NetworkStatusPanel extends StatelessWidget {
   }
 }
 
-class NetworkStatusPanelBody extends StatelessWidget {
+class NetworkStatusPanelBody extends StatefulWidget {
   final String mode;
   final String label;
   final String detail;
@@ -198,11 +198,55 @@ class NetworkStatusPanelBody extends StatelessWidget {
   });
 
   @override
+  State<NetworkStatusPanelBody> createState() => _NetworkStatusPanelBodyState();
+}
+
+class _NetworkStatusPanelBodyState extends State<NetworkStatusPanelBody> {
+  @override
   Widget build(BuildContext context) {
-    final directAccessValue = directEndpoints.join(', ');
-    final color = colorForNetworkMode(mode);
+    final directAccessValue = widget.directEndpoints.join(', ');
+    final color = colorForNetworkMode(widget.mode);
     final secondaryTextColor =
         Theme.of(context).textTheme.bodySmall?.color?.withOpacity(0.75);
+    final hasDirectAccessSection = widget.mode == 'local_only' ||
+        widget.pairingRequired ||
+        directAccessValue.isNotEmpty;
+
+    Widget buildStatusValue(
+      String value, {
+      bool copyable = false,
+      bool ellipsize = false,
+    }) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Text(
+              value,
+              maxLines: ellipsize ? 1 : null,
+              overflow:
+                  ellipsize ? TextOverflow.ellipsis : TextOverflow.visible,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: secondaryTextColor,
+                  ),
+            ),
+          ),
+          if (copyable)
+            IconButton(
+              onPressed: () => copyNetworkStatusValue(value),
+              icon: const Icon(Icons.copy_rounded, size: 15),
+              visualDensity: VisualDensity.compact,
+              splashRadius: 16,
+              constraints: const BoxConstraints(
+                minWidth: 24,
+                minHeight: 24,
+              ),
+              tooltip: 'Copy',
+              padding: EdgeInsets.zero,
+            ),
+        ],
+      );
+    }
 
     Widget buildStatusLine(
       String label,
@@ -252,7 +296,7 @@ class NetworkStatusPanelBody extends StatelessWidget {
             border: Border.all(color: color.withOpacity(0.4)),
           ),
           child: Text(
-            label,
+            widget.label,
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: color,
                   fontWeight: FontWeight.w700,
@@ -260,29 +304,62 @@ class NetworkStatusPanelBody extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 8),
-        buildStatusLine('LAN discovery', lanDiscoveryLabel),
-        if (trustPhrase.isNotEmpty) ...[
+        buildStatusLine('LAN discovery', widget.lanDiscoveryLabel),
+        if (widget.trustPhrase.isNotEmpty) ...[
           const SizedBox(height: 4),
-          buildStatusLine('Trust phrase', trustPhrase, copyable: true),
-        ],
-        if (mode == 'local_only' || pairingRequired) ...[
-          const SizedBox(height: 4),
-          buildStatusLine(
-            'Pairing passphrase',
-            pairingRequired ? 'Required' : 'Disabled',
+          ExpansionTile(
+            key: const ValueKey('network-status-trust-phrase'),
+            tilePadding: EdgeInsets.zero,
+            childrenPadding: const EdgeInsets.only(left: 12, bottom: 4),
+            dense: true,
+            shape: const Border(),
+            collapsedShape: const Border(),
+            title: Text(
+              'Trust phrase',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: secondaryTextColor,
+                  ),
+            ),
+            children: [
+              buildStatusValue(widget.trustPhrase, copyable: true),
+            ],
           ),
         ],
-        if (directAccessValue.isNotEmpty) ...[
+        if (hasDirectAccessSection) ...[
           const SizedBox(height: 4),
-          buildStatusLine(
-            'Direct access',
-            directAccessValue,
-            copyable: true,
+          ExpansionTile(
+            key: const ValueKey('network-status-direct-access'),
+            tilePadding: EdgeInsets.zero,
+            childrenPadding: const EdgeInsets.only(left: 12, bottom: 4),
+            dense: true,
+            shape: const Border(),
+            collapsedShape: const Border(),
+            title: Text(
+              'Direct access',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: secondaryTextColor,
+                  ),
+            ),
+            children: [
+              if (widget.mode == 'local_only' || widget.pairingRequired)
+                buildStatusLine(
+                  'Pairing passphrase',
+                  widget.pairingRequired ? 'Required' : 'Disabled',
+                ),
+              if (directAccessValue.isNotEmpty) ...[
+                if (widget.mode == 'local_only' || widget.pairingRequired)
+                  const SizedBox(height: 4),
+                buildStatusValue(
+                  directAccessValue,
+                  copyable: true,
+                ),
+              ],
+            ],
           ),
         ],
-        if (detail.isNotEmpty) ...[
+        if (widget.detail.isNotEmpty) ...[
           const SizedBox(height: 4),
-          buildStatusLine('Endpoint', detail, ellipsize: true),
+          buildStatusLine('Endpoint', widget.detail, ellipsize: true),
         ],
         const SizedBox(height: 14),
         const Divider(height: 1),

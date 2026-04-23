@@ -11,6 +11,7 @@ import 'package:flutter_hbb/common/widgets/setting_widgets.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_home_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
+import 'package:flutter_hbb/desktop/widgets/first_run_wizard.dart';
 import 'package:flutter_hbb/desktop/widgets/remote_toolbar.dart';
 import 'package:flutter_hbb/mobile/widgets/dialog.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
@@ -59,6 +60,7 @@ enum SettingsTabKey {
   account,
   printer,
   about,
+  quickStart,
 }
 
 class DesktopSettingPage extends StatefulWidget {
@@ -80,6 +82,7 @@ class DesktopSettingPage extends StatefulWidget {
     if (isWindows &&
         bind.mainGetBuildinOption(key: kOptionHideRemotePrinterSetting) != 'Y')
       SettingsTabKey.printer,
+    SettingsTabKey.quickStart,
     SettingsTabKey.about,
   ];
 
@@ -212,6 +215,10 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
           settingTabs
               .add(_TabInfo(tab, 'About', Icons.info_outline, Icons.info));
           break;
+        case SettingsTabKey.quickStart:
+          settingTabs.add(_TabInfo(tab, 'Quick Start',
+              Icons.slideshow_outlined, Icons.slideshow));
+          break;
       }
     }
     return settingTabs;
@@ -244,6 +251,9 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
           break;
         case SettingsTabKey.about:
           children.add(const _About());
+          break;
+        case SettingsTabKey.quickStart:
+          children.add(const _QuickStartSettingsPage());
           break;
       }
     }
@@ -2594,6 +2604,40 @@ class _AboutState extends State<_About> {
         ]),
       );
     });
+  }
+}
+
+class _QuickStartSettingsPage extends StatelessWidget {
+  const _QuickStartSettingsPage({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      child: _Card(
+        title: 'Quick Start',
+        children: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 8.0),
+              Text(
+                'Open the welcome wizard again to review local connection basics and adjust the startup options.',
+                style: TextStyle(fontSize: _kContentFontSize, height: 1.45),
+              ).marginOnly(bottom: 18),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: ElevatedButton(
+                  onPressed: () async {
+                    await showAndApplyFirstRunWizard(context);
+                  },
+                  child: const Text('Open Quick Start'),
+                ),
+              ),
+            ],
+          ).marginOnly(left: _kContentHMargin),
+        ],
+      ),
+    );
   }
 }
 

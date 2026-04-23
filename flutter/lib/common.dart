@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math';
 
 import 'package:back_button_interceptor/back_button_interceptor.dart';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
@@ -1679,6 +1678,25 @@ bool isLanDiscoveryModeFixed() {
       isOptionFixed(kOptionEnableLanDiscovery);
 }
 
+Future<void> ensureInitialClientDefaults() async {
+  if (!isOptionFixed(kOptionDirectServer) &&
+      (await bind.mainGetOption(key: kOptionDirectServer)).isEmpty) {
+    await bind.mainSetOption(key: kOptionDirectServer, value: 'Y');
+  }
+}
+
+Future<bool> shouldShowWelcomeOnStartup() async {
+  if (!isDesktop || isWeb || bind.isIncomingOnly() || bind.isOutgoingOnly()) {
+    return false;
+  }
+  return bind.mainGetLocalOption(key: kLocalOptionShowWelcomeOnStartup) != 'N';
+}
+
+Future<void> setShowWelcomeOnStartup(bool show) async {
+  await bind.mainSetLocalOption(
+      key: kLocalOptionShowWelcomeOnStartup, value: show ? 'Y' : 'N');
+}
+
 // Don't use `option2bool()` and `bool2option()` to convert the session option.
 // Use `sessionGetToggleOption()` and `sessionToggleOption()` instead.
 // Because all session options use `Y` and `<Empty>` as values.
@@ -2746,6 +2764,51 @@ class WakelockManager {
   // calling disable() when not enabled.
   // See: https://github.com/fluttercommunity/wakelock_plus/blob/0c74e5bbc6aefac57b6c96bb7ef987705ed559ec/wakelock_plus/lib/src/wakelock_plus_linux_plugin.dart#L48
   static bool _enabled = false;
+  static bool _linuxWakelockUnavailable = false;
+  static bool _didLogLinuxWakelockIssue = false;
+
+  static bool _hasLinuxSessionRuntime() {
+    if (!isLinux || _linuxWakelockUnavailable) {
+      return !_linuxWakelockUnavailable;
+    }
+    final xdgRuntimeDir = bind.mainGetEnv(key: 'XDG_RUNTIME_DIR');
+    final dbusSessionBusAddress =
+        bind.mainGetEnv(key: 'DBUS_SESSION_BUS_ADDRESS');
+    final hasRuntime =
+        xdgRuntimeDir.isNotEmpty && dbusSessionBusAddress.isNotEmpty;
+    if (!hasRuntime) {
+      _linuxWakelockUnavailable = true;
+      if (!_didLogLinuxWakelockIssue) {
+        _didLogLinuxWakelockIssue = true;
+        debugPrint(
+            'Skip wakelock on Linux: session runtime or D-Bus is unavailable.');
+      }
+    }
+    return hasRuntime;
+  }
+
+  static Future<void> _applyDesktopWakelock(bool enable) async {
+    try {
+      if (enable) {
+        await WakelockPlus.enable();
+      } else {
+        await WakelockPlus.disable();
+      }
+    } catch (e) {
+      if (isLinux) {
+        _linuxWakelockUnavailable = true;
+        if (!_didLogLinuxWakelockIssue) {
+          _didLogLinuxWakelockIssue = true;
+          debugPrint('Disable Linux wakelock integration: $e');
+        }
+      } else {
+        debugPrint('Failed to ${enable ? 'enable' : 'disable'} wakelock: $e');
+      }
+      if (enable) {
+        _enabled = false;
+      }
+    }
+  }
 
   static void enable(UniqueKey key, {bool isServer = false}) {
     // Check if we should keep awake during outgoing sessions
@@ -2760,8 +2823,11 @@ class WakelockManager {
       _enabledKeys.add(key);
     }
     if (!_enabled) {
+      if (!_hasLinuxSessionRuntime()) {
+        return;
+      }
       _enabled = true;
-      WakelockPlus.enable();
+      unawaited(_applyDesktopWakelock(true));
     }
   }
 
@@ -2773,10 +2839,23 @@ class WakelockManager {
       }
     }
     if (_enabled) {
-      WakelockPlus.disable();
       _enabled = false;
+      unawaited(_applyDesktopWakelock(false));
     }
   }
+}
+
+bool shouldHideMainWindowOnClose() {
+  if (!isLinux) {
+    return true;
+  }
+  if (bind.mainGetEnv(key: 'WSL_DISTRO_NAME').isNotEmpty) {
+    return false;
+  }
+  final xdgRuntimeDir = bind.mainGetEnv(key: 'XDG_RUNTIME_DIR');
+  final dbusSessionBusAddress =
+      bind.mainGetEnv(key: 'DBUS_SESSION_BUS_ADDRESS');
+  return xdgRuntimeDir.isNotEmpty && dbusSessionBusAddress.isNotEmpty;
 }
 
 /// call this to reload current window.

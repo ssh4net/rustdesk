@@ -12,6 +12,7 @@ import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/connection_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
+import 'package:flutter_hbb/desktop/widgets/first_run_wizard.dart';
 import 'package:flutter_hbb/desktop/widgets/update_progress.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/server_model.dart';
@@ -34,6 +35,11 @@ class DesktopHomePage extends StatefulWidget {
 }
 
 const borderColor = Color(0xFF2F65BA);
+
+enum _HomePageMenuAction {
+  quickStart,
+  settings,
+}
 
 class _DesktopHomePageState extends State<DesktopHomePage>
     with AutomaticKeepAliveClientMixin, WidgetsBindingObserver {
@@ -258,10 +264,38 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   Widget buildPopupMenu(BuildContext context) {
     final textColor = Theme.of(context).textTheme.titleLarge?.color;
     RxBool hover = false.obs;
-    return InkWell(
-      onTap: DesktopTabPage.onAddSetting,
-      child: Tooltip(
-        message: translate('Settings'),
+    return PopupMenuButton<_HomePageMenuAction>(
+      tooltip: translate('Settings'),
+      onSelected: (value) async {
+        switch (value) {
+          case _HomePageMenuAction.quickStart:
+            await showAndApplyFirstRunWizard(context);
+            break;
+          case _HomePageMenuAction.settings:
+            DesktopTabPage.onAddSetting();
+            break;
+        }
+      },
+      itemBuilder: (_) {
+        final items = <PopupMenuEntry<_HomePageMenuAction>>[
+          const PopupMenuItem<_HomePageMenuAction>(
+            value: _HomePageMenuAction.quickStart,
+            child: Text('Quick start'),
+          ),
+        ];
+        if (!bind.isDisableSettings()) {
+          items.add(
+            PopupMenuItem<_HomePageMenuAction>(
+              value: _HomePageMenuAction.settings,
+              child: Text(translate('Settings')),
+            ),
+          );
+        }
+        return items;
+      },
+      child: MouseRegion(
+        onEnter: (_) => hover.value = true,
+        onExit: (_) => hover.value = false,
         child: Obx(
           () => CircleAvatar(
             radius: 15,
@@ -276,7 +310,6 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           ),
         ),
       ),
-      onHover: (value) => hover.value = value,
     );
   }
 
