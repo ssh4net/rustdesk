@@ -2,6 +2,25 @@ import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:uuid/uuid.dart';
 
+const List<int> kCustomScalePresetPercents = <int>[
+  10,
+  50,
+  100,
+  150,
+  200,
+  250,
+  300,
+  350,
+  400,
+  450,
+  500,
+  600,
+  700,
+  800,
+  900,
+  1000,
+];
+
 /// Clamp custom scale percent to supported bounds.
 /// Keep this in sync with the slider's minimum in the desktop toolbar UI.
 ///
@@ -25,6 +44,19 @@ Future<int> getSessionCustomScalePercent(UuidValue sessionId) async {
   final opt = await bind.sessionGetFlutterOption(
       sessionId: sessionId, k: kCustomScalePercentKey);
   return parseCustomScalePercent(opt);
+}
+
+/// Persist a session custom scale percent and ensure the session is in custom view mode.
+Future<void> setSessionCustomScalePercent(
+    UuidValue sessionId, int percent) async {
+  final clamped = clampCustomScalePercent(percent);
+  await bind.sessionSetFlutterOption(
+      sessionId: sessionId, k: kCustomScalePercentKey, v: clamped.toString());
+  final curStyle = await bind.sessionGetViewStyle(sessionId: sessionId);
+  if (curStyle != kRemoteViewStyleCustom) {
+    await bind.sessionSetViewStyle(
+        sessionId: sessionId, value: kRemoteViewStyleCustom);
+  }
 }
 
 /// Fetch and compute the custom scale factor for a session.

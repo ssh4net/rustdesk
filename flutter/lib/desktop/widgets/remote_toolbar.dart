@@ -1075,8 +1075,14 @@ class _DisplayMenuState extends State<_DisplayMenu> {
                   // When entering custom, keep submenu open to show the slider controls
                   closeOnActivate: !keepOpenForThisItem);
             }).toList(),
-            // Only show a divider when custom is NOT selected
-            if (!isCustomSelected) Divider(),
+            if (isCustomSelected) ...[
+              Divider(),
+              _ScalePresetsMenu(
+                ffi: widget.ffi,
+                customPercent: customPercent,
+              ),
+            ] else
+              Divider(),
             _customControlsIfCustomSelected(
                 onChanged: (v) => customPercent.value = v),
           ]);
@@ -1292,7 +1298,7 @@ class _CustomScaleMenuControlsState
         data: SliderTheme.of(context).copyWith(
           activeTrackColor: colorScheme.primary,
           thumbColor: colorScheme.primary,
-          overlayColor: colorScheme.primary.withOpacity(0.1),
+          overlayColor: colorScheme.primary.withValues(alpha: 0.1),
           showValueIndicator: ShowValueIndicator.never,
           thumbShape: _RectValueThumbShape(
             min: CustomScaleControls.minPercent.toDouble(),
@@ -1307,11 +1313,6 @@ class _CustomScaleMenuControlsState
           value: scalePos,
           min: 0.0,
           max: 1.0,
-          // Use a wide range of divisions (calculated as (CustomScaleControls.maxPercent - CustomScaleControls.minPercent)) to provide ~1% precision increments.
-          // This allows users to set precise scale values. Lower values would require more fine-tuning via the +/- buttons, which is undesirable for big ranges.
-          divisions:
-              (CustomScaleControls.maxPercent - CustomScaleControls.minPercent)
-                  .round(),
           onChanged: onSliderChanged,
         ),
       ),
@@ -1346,6 +1347,48 @@ class _CustomScaleMenuControlsState
       ),
       Divider(),
     ]);
+  }
+}
+
+class _ScalePresetsMenu extends StatelessWidget {
+  final FFI ffi;
+  final RxInt customPercent;
+
+  const _ScalePresetsMenu({
+    Key? key,
+    required this.ffi,
+    required this.customPercent,
+  }) : super(key: key);
+
+  Future<void> _applyPreset(int percent) async {
+    final next = clampCustomScalePercent(percent);
+    await setSessionCustomScalePercent(ffi.sessionId, next);
+    customPercent.value = next;
+    await ffi.canvasModel.updateViewStyle();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() => _SubmenuButton(
+          ffi: ffi,
+          child: const Text('Scale'),
+          menuChildren: kCustomScalePresetPercents
+              .map((percent) => RdoMenuButton<int>(
+                    value: percent,
+                    groupValue:
+                        kCustomScalePresetPercents.contains(customPercent.value)
+                            ? customPercent.value
+                            : null,
+                    onChanged: (value) {
+                      if (value != null) {
+                        _applyPreset(value);
+                      }
+                    },
+                    child: Text('$percent%'),
+                    ffi: ffi,
+                  ))
+              .toList(),
+        ));
   }
 }
 

@@ -6,13 +6,16 @@ import 'package:flutter_hbb/common/widgets/custom_scale_base.dart';
 class MobileCustomScaleControls extends StatefulWidget {
   final FFI ffi;
   final ValueChanged<int>? onChanged;
-  const MobileCustomScaleControls({super.key, required this.ffi, this.onChanged});
+  const MobileCustomScaleControls(
+      {super.key, required this.ffi, this.onChanged});
 
   @override
-  State<MobileCustomScaleControls> createState() => _MobileCustomScaleControlsState();
+  State<MobileCustomScaleControls> createState() =>
+      _MobileCustomScaleControlsState();
 }
 
-class _MobileCustomScaleControlsState extends CustomScaleControls<MobileCustomScaleControls> {
+class _MobileCustomScaleControlsState
+    extends CustomScaleControls<MobileCustomScaleControls> {
   @override
   FFI get ffi => widget.ffi;
 
@@ -28,7 +31,6 @@ class _MobileCustomScaleControlsState extends CustomScaleControls<MobileCustomSc
       value: scalePos,
       min: 0.0,
       max: 1.0,
-      divisions: (CustomScaleControls.maxPercent - CustomScaleControls.minPercent).round(),
       label: '$scaleValue%',
       onChanged: onSliderChanged,
     );
