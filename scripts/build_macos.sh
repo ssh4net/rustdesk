@@ -105,5 +105,9 @@ if [[ -f "$repo_root/target/release/service" ]]; then
     "$flutter_dir/build/macos/Build/Products/Release/RustDesk.app/Contents/MacOS/"
 fi
 
+codesign --force --deep --sign - --options runtime \
+  --entitlements "$flutter_dir/macos/Runner/Release.entitlements" \
+  "$flutter_dir/build/macos/Build/Products/Release/RustDesk.app"
+
 echo "macOS bundle:"
 echo "$flutter_dir/build/macos/Build/Products/Release"
