@@ -3,6 +3,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart' as flutter_widgets
+    show MenuController, RawMenuAnchorGroup;
 import 'package:flutter_hbb/common/widgets/audio_input.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
 import 'package:flutter_hbb/common/widgets/toolbar.dart';
@@ -15,7 +17,6 @@ import 'package:flutter_hbb/plugin/common.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
-import 'package:debounce_throttle/debounce_throttle.dart';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:window_size/window_size.dart' as window_size;
 
@@ -27,6 +28,62 @@ import './popup_menu.dart';
 import './kb_layout_type_chooser.dart';
 import 'package:flutter_hbb/utils/scale.dart';
 import 'package:flutter_hbb/common/widgets/custom_scale_base.dart';
+
+class ToolbarImagePointerState {
+  final bool insideImage;
+  final Offset? localPosition;
+
+  const ToolbarImagePointerState({
+    required this.insideImage,
+    this.localPosition,
+  });
+}
+
+typedef ToolbarImagePointerHandler = void Function(ToolbarImagePointerState);
+
+class _ToolbarMenuLifecycleScope extends InheritedWidget {
+  final VoidCallback onMenuOpen;
+  final VoidCallback onMenuClose;
+
+  const _ToolbarMenuLifecycleScope({
+    required this.onMenuOpen,
+    required this.onMenuClose,
+    required super.child,
+  });
+
+  static _ToolbarMenuLifecycleScope? maybeOf(BuildContext context) {
+    return context.getInheritedWidgetOfExactType<_ToolbarMenuLifecycleScope>();
+  }
+
+  @override
+  bool updateShouldNotify(_ToolbarMenuLifecycleScope oldWidget) {
+    return onMenuOpen != oldWidget.onMenuOpen ||
+        onMenuClose != oldWidget.onMenuClose;
+  }
+}
+
+int _parseToolbarIntOption(
+  String? raw, {
+  required int defaultValue,
+  required int min,
+  required int max,
+}) {
+  return (int.tryParse(raw ?? '') ?? defaultValue).clamp(min, max);
+}
+
+int _getToolbarIntDefault(
+  String key, {
+  required int defaultValue,
+  required int min,
+  required int max,
+}) {
+  return _parseToolbarIntOption(
+    bind.mainGetUserDefaultOption(key: key),
+    defaultValue: defaultValue,
+    min: min,
+    max: max,
+  );
+}
 
 class ToolbarState {
   late RxBool _pin;
@@ -56,6 +113,18 @@ class ToolbarState {
   }
 
   bool get pin => _pin.value;
+  int get revealZonePx => _getToolbarIntDefault(
+        kOptionRemoteToolbarRevealZonePx,
+        defaultValue: kDefaultRemoteToolbarRevealZonePx,
+        min: kMinRemoteToolbarRevealZonePx,
+        max: kMaxRemoteToolbarRevealZonePx,
+      );
+  int get hideDelayMs => _getToolbarIntDefault(
+        kOptionRemoteToolbarHideDelayMs,
+        defaultValue: kDefaultRemoteToolbarHideDelayMs,
+        min: kMinRemoteToolbarHideDelayMs,
+        max: kMaxRemoteToolbarHideDelayMs,
+      );
 
   /// Initialize all toolbar states from session options.
   /// This should be called once when the toolbar is first created.
@@ -231,6 +300,8 @@ class RemoteToolbar extends StatefulWidget {
   final ToolbarState state;
   final Function(int, Function(bool)) onEnterOrLeaveImageSetter;
   final Function(int) onEnterOrLeaveImageCleaner;
+  final Function(int, ToolbarImagePointerHandler) onImagePointerStateSetter;
+  final Function(int) onImagePointerStateCleaner;
   final Function(VoidCallback) setRemoteState;
 
   RemoteToolbar({
@@ -240,6 +311,8 @@ class RemoteToolbar extends StatefulWidget {
     required this.state,
     required this.onEnterOrLeaveImageSetter,
     required this.onEnterOrLeaveImageCleaner,
+    required this.onImagePointerStateSetter,
+    required this.onImagePointerStateCleaner,
     required this.setRemoteState,
   }) : super(key: key);
 
@@ -248,10 +321,15 @@ class RemoteToolbar extends StatefulWidget {
 }
 
 class _RemoteToolbarState extends State<RemoteToolbar> {
-  late Debouncer<int> _debouncerHide;
+  Timer? _autoHideTimer;
   bool _isCursorOverImage = false;
+  bool _isCursorOverToolbar = false;
+  bool _visible = true;
+  bool _wasSessionHidden = false;
+  Offset? _lastImagePointer;
   final _fractionX = 0.5.obs;
   final _dragging = false.obs;
+  final _menuController = flutter_widgets.MenuController();
 
   int get windowId => stateGlobal.windowId;
 
@@ -268,10 +346,122 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
   PeerInfo get pi => widget.ffi.ffiModel.pi;
   FfiModel get ffiModel => widget.ffi.ffiModel;
 
-  triggerAutoHide() => _debouncerHide.value = _debouncerHide.value + 1;
-
   void _minimize() async =>
       await WindowController.fromWindowId(windowId).minimize();
+
+  bool get _isInRevealZone =>
+      _isCursorOverImage &&
+      _lastImagePointer != null &&
+      _lastImagePointer!.dy <= widget.state.revealZonePx;
+
+  void _cancelAutoHide() {
+    _autoHideTimer?.cancel();
+    _autoHideTimer = null;
+  }
+
+  bool get _menuIsOpen => _menuController.isOpen;
+
+  void _closeMenus() {
+    _menuController.close();
+  }
+
+  void _handleMenuOpened() {
+    _cancelAutoHide();
+    _setVisible(true);
+  }
+
+  void _handleMenuClosed() {
+    if (!mounted || hide.value) return;
+    if (pin || _isCursorOverToolbar || _isInRevealZone || _menuIsOpen) {
+      _cancelAutoHide();
+      _setVisible(true);
+      return;
+    }
+    if (_visible) {
+      _scheduleAutoHide();
+    }
+  }
+
+  void _setVisible(bool value) {
+    if (_visible == value || !mounted) return;
+    if (!value) {
+      _closeMenus();
+    }
+    setState(() {
+      _visible = value;
+    });
+  }
+
+  void _showCurrentShape({bool scheduleHide = true}) {
+    _cancelAutoHide();
+    _setVisible(true);
+    if (scheduleHide &&
+        !pin &&
+        !_isCursorOverToolbar &&
+        !_isInRevealZone &&
+        !_menuIsOpen &&
+        _dragging.isFalse) {
+      _scheduleAutoHide();
+    }
+  }
+
+  void _scheduleAutoHide() {
+    if (pin || !_visible || _dragging.isTrue || _menuIsOpen) return;
+    _autoHideTimer?.cancel();
+    _autoHideTimer = Timer(
+      Duration(milliseconds: widget.state.hideDelayMs),
+      () {
+        if (!mounted) return;
+        if (!pin &&
+            !_isCursorOverToolbar &&
+            !_isInRevealZone &&
+            !_menuIsOpen &&
+            _dragging.isFalse) {
+          _setVisible(false);
+        }
+      },
+    );
+  }
+
+  void _handleToolbarPointerEnter() {
+    _isCursorOverToolbar = true;
+    _cancelAutoHide();
+  }
+
+  void _handleToolbarPointerExit() {
+    _isCursorOverToolbar = false;
+    if (!pin && !_isInRevealZone && !_menuIsOpen) {
+      _scheduleAutoHide();
+    }
+  }
+
+  void _handleImagePointerState(ToolbarImagePointerState state) {
+    _isCursorOverImage = state.insideImage;
+    _lastImagePointer = state.insideImage ? state.localPosition : null;
+
+    if (hide.value) return;
+
+    if (_menuIsOpen) {
+      _showCurrentShape(scheduleHide: false);
+      return;
+    }
+
+    if (_isInRevealZone) {
+      _showCurrentShape(scheduleHide: false);
+      return;
+    }
+
+    if (!_isCursorOverImage) {
+      if (!pin && !_isCursorOverToolbar) {
+        _scheduleAutoHide();
+      }
+      return;
+    }
+
+    if (_visible && !pin && !_isCursorOverToolbar) {
+      _scheduleAutoHide();
+    }
+  }
 
   @override
   initState() {
@@ -287,33 +477,26 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
       widget.state.init(widget.ffi.sessionId);
     });
 
-    _debouncerHide = Debouncer<int>(
-      Duration(milliseconds: 5000),
-      onChanged: _debouncerHideProc,
-      initialValue: 0,
-    );
-
     widget.onEnterOrLeaveImageSetter(identityHashCode(this), (enter) {
       if (enter) {
-        triggerAutoHide();
         _isCursorOverImage = true;
       } else {
         _isCursorOverImage = false;
       }
     });
-  }
-
-  _debouncerHideProc(int v) {
-    if (!pin && collapse.isFalse && _isCursorOverImage && _dragging.isFalse) {
-      collapse.value = true;
-    }
+    widget.onImagePointerStateSetter(
+      identityHashCode(this),
+      _handleImagePointerState,
+    );
   }
 
   @override
   dispose() {
-    super.dispose();
-
+    _cancelAutoHide();
+    _closeMenus();
     widget.onEnterOrLeaveImageCleaner(identityHashCode(this));
+    widget.onImagePointerStateCleaner(identityHashCode(this));
+    super.dispose();
   }
 
   @override
@@ -325,28 +508,55 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
       }
       // If toolbar is hidden, return empty widget
       if (hide.value) {
+        _wasSessionHidden = true;
+        _cancelAutoHide();
+        _closeMenus();
         return const SizedBox.shrink();
       }
+      if (_wasSessionHidden) {
+        _wasSessionHidden = false;
+        _visible = true;
+      }
+      final currentShape = collapse.isFalse
+          ? _buildToolbar(context)
+          : _buildDraggableCollapse(context);
       return Align(
-        alignment: Alignment.topCenter,
-        child: collapse.isFalse
-            ? _buildToolbar(context)
-            : _buildDraggableCollapse(context),
+        alignment: collapse.isFalse
+            ? Alignment.topCenter
+            : FractionalOffset(_fractionX.value, 0),
+        child: IgnorePointer(
+          ignoring: !_visible,
+          child: AnimatedSlide(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            offset: _visible ? Offset.zero : const Offset(0, -1.15),
+            child: AnimatedOpacity(
+              duration: const Duration(milliseconds: 180),
+              opacity: _visible ? 1 : 0,
+              child: MouseRegion(
+                onEnter: (_) => _handleToolbarPointerEnter(),
+                onExit: (_) => _handleToolbarPointerExit(),
+                child: _ToolbarMenuLifecycleScope(
+                  onMenuOpen: _handleMenuOpened,
+                  onMenuClose: _handleMenuClosed,
+                  child: flutter_widgets.RawMenuAnchorGroup(
+                    controller: _menuController,
+                    child: currentShape,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
       );
     });
   }
 
   Widget _buildDraggableCollapse(BuildContext context) {
-    return Obx(() {
-      if (collapse.isFalse && _dragging.isFalse) {
-        triggerAutoHide();
-      }
-      final borderRadius = BorderRadius.vertical(
-        bottom: Radius.circular(5),
-      );
-      return Align(
-        alignment: FractionalOffset(_fractionX.value, 0),
-        child: Offstage(
+    final borderRadius = BorderRadius.vertical(
+      bottom: Radius.circular(5),
+    );
+    return Obx(() => Offstage(
           offstage: _dragging.isTrue,
           child: Material(
             elevation: _ToolbarTheme.elevation,
@@ -363,9 +573,7 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
               borderRadius: borderRadius,
             ),
           ),
-        ),
-      );
-    });
+        ));
   }
 
   Widget _buildToolbar(BuildContext context) {
@@ -404,39 +612,37 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
       toolbarItems.add(_VoiceCallMenu(id: widget.id, ffi: widget.ffi));
     }
     if (!isWeb) toolbarItems.add(_RecordMenu());
+    toolbarItems.add(_CollapseMenu(
+      sessionId: widget.ffi.sessionId,
+      state: widget.state,
+    ));
     toolbarItems.add(_CloseMenu(id: widget.id, ffi: widget.ffi));
     final toolbarBorderRadius = BorderRadius.all(Radius.circular(4.0));
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Material(
-          elevation: _ToolbarTheme.elevation,
-          shadowColor: MyTheme.color(context).shadow,
-          borderRadius: toolbarBorderRadius,
-          color: Theme.of(context)
-              .menuBarTheme
-              .style
-              ?.backgroundColor
-              ?.resolve(MaterialState.values.toSet()),
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Theme(
-              data: themeData(),
-              child: _ToolbarTheme.borderWrapper(
-                  context,
-                  Row(
-                    children: [
-                      SizedBox(width: _ToolbarTheme.buttonHMargin * 2),
-                      ...toolbarItems,
-                      SizedBox(width: _ToolbarTheme.buttonHMargin * 2)
-                    ],
-                  ),
-                  toolbarBorderRadius),
-            ),
-          ),
+    return Material(
+      elevation: _ToolbarTheme.elevation,
+      shadowColor: MyTheme.color(context).shadow,
+      borderRadius: toolbarBorderRadius,
+      color: Theme.of(context)
+          .menuBarTheme
+          .style
+          ?.backgroundColor
+          ?.resolve(MaterialState.values.toSet()),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Theme(
+          data: themeData(),
+          child: _ToolbarTheme.borderWrapper(
+              context,
+              Row(
+                children: [
+                  SizedBox(width: _ToolbarTheme.buttonHMargin * 2),
+                  ...toolbarItems,
+                  SizedBox(width: _ToolbarTheme.buttonHMargin * 2)
+                ],
+              ),
+              toolbarBorderRadius),
         ),
-        _buildDraggableCollapse(context),
-      ],
+      ),
     );
   }
 
@@ -2254,6 +2460,32 @@ class _RecordMenu extends StatelessWidget {
   }
 }
 
+class _CollapseMenu extends StatelessWidget {
+  final SessionID sessionId;
+  final ToolbarState state;
+
+  const _CollapseMenu({
+    Key? key,
+    required this.sessionId,
+    required this.state,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return _IconMenuButton(
+      tooltip: 'Collapse Toolbar',
+      icon: const Icon(
+        Icons.expand_less,
+        size: _ToolbarTheme.buttonSize,
+        color: Colors.white,
+      ),
+      onPressed: () => state.switchCollapse(sessionId),
+      color: _ToolbarTheme.inactiveColor,
+      hoverColor: _ToolbarTheme.hoverInactiveColor,
+    );
+  }
+}
+
 class _CloseMenu extends StatelessWidget {
   final String id;
   final FFI ffi;
@@ -2396,6 +2628,7 @@ class _IconSubmenuButtonState extends State<_IconSubmenuButton> {
 
   @override
   Widget build(BuildContext context) {
+    final menuLifecycle = _ToolbarMenuLifecycleScope.maybeOf(context);
     assert(widget.svg != null || widget.icon != null);
     final icon = widget.icon ??
         SvgPicture.asset(
@@ -2414,6 +2647,8 @@ class _IconSubmenuButtonState extends State<_IconSubmenuButton> {
             onHover: (value) => setState(() {
                   hover = value;
                 }),
+            onOpen: menuLifecycle?.onMenuOpen,
+            onClose: menuLifecycle?.onMenuClose,
             child: Tooltip(
                 message: translate(widget.tooltip),
                 child: Material(
@@ -2718,7 +2953,7 @@ class _DraggableShowHideState extends State<_DraggableShowHide> {
           }),
           Obx((() => Tooltip(
                 message: translate(
-                    collapse.isFalse ? 'Hide Toolbar' : 'Show Toolbar'),
+                    collapse.isFalse ? 'Collapse Toolbar' : 'Expand Toolbar'),
                 child: Icon(
                   collapse.isFalse ? Icons.expand_less : Icons.expand_more,
                   size: iconSize,

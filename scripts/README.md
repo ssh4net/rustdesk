@@ -44,6 +44,12 @@ Optional overrides:
 Use `-NoHwCodec` to build without the `hwcodec` feature.
 Use `-Clean` to force-refresh Flutter metadata and Windows build intermediates.
 
+Toolbar lab:
+
+```powershell
+.\scripts\run_toolbar_lab_windows.ps1
+```
+
 Final bundle:
 
 ```text
@@ -74,6 +80,12 @@ RUSTDESK_LINUX_CODEC_ROOT=/mnt/f/DVS/linux scripts/build_linux.sh --clean
 scripts/build_linux.sh --hwcodec
 ```
 
+Toolbar lab:
+
+```bash
+scripts/run_toolbar_lab_linux.sh
+```
+
 Final bundle:
 
 ```text
@@ -96,6 +108,12 @@ RUSTDESK_MACOS_CODEC_ROOT=/path/to/prefix \
 scripts/build_macos.sh --screencapturekit
 ```
 
+Toolbar lab:
+
+```bash
+scripts/run_toolbar_lab_macos.sh
+```
+
 Final bundle:
 
 ```text
@@ -114,3 +132,16 @@ target
 ```
 
 Ship only the final Flutter runner bundle for the target platform.
+
+## Prototype Runners
+
+The toolbar lab wrappers are debug-oriented `flutter run` helpers for fast UI
+iteration. They refresh stale `.dart_tool` state the same way as the full build
+wrappers, optionally build the native Rust library, and then launch:
+
+- `lib/prototyping/main_toolbar_lab.dart`
+
+Common options:
+
+- Linux/macOS: `--clean`, `--skip-cargo`, `--device DEVICE`, `-- ...extra flutter run args`
+- Windows: `-Clean`, `-SkipCargo`, `-Device windows`, `-HwCodec`, plus extra trailing `flutter run` args

@@ -216,8 +216,8 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
               .add(_TabInfo(tab, 'About', Icons.info_outline, Icons.info));
           break;
         case SettingsTabKey.quickStart:
-          settingTabs.add(_TabInfo(tab, 'Quick Start',
-              Icons.slideshow_outlined, Icons.slideshow));
+          settingTabs.add(_TabInfo(
+              tab, 'Quick Start', Icons.slideshow_outlined, Icons.slideshow));
           break;
       }
     }
@@ -1261,18 +1261,17 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                   ?.color
                   ?.withOpacity(0.6),
             ),
-          ),
-          optSetter: (key, value) async {
-            if (!value) {
-              await mainSetBoolOption(key, value);
-              return;
-            }
-            final approved =
-                await _confirmEnableUnverifiedPeerTrust(context) ?? false;
-            if (approved) {
-              await mainSetBoolOption(key, value);
-            }
-          }),
+          ), optSetter: (key, value) async {
+        if (!value) {
+          await mainSetBoolOption(key, value);
+          return;
+        }
+        final approved =
+            await _confirmEnableUnverifiedPeerTrust(context) ?? false;
+        if (approved) {
+          await mainSetBoolOption(key, value);
+        }
+      }),
       lanDiscoveryMode(context, enabled),
       ...directIp(context),
       whitelist(),
@@ -1354,8 +1353,7 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
         children: [
           Expanded(
             child: Text(
-              translate(
-                  pairingPassphrase.isEmpty ? 'Disabled' : 'Configured'),
+              translate(pairingPassphrase.isEmpty ? 'Disabled' : 'Configured'),
               style: TextStyle(
                 color: disabledTextColor(
                     context, enabled && !locked && !isOptFixed),
@@ -1369,8 +1367,8 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                     setState(() {});
                   }
                 : null,
-            child: Text(
-                translate(pairingPassphrase.isEmpty ? 'Set' : 'Change')),
+            child:
+                Text(translate(pairingPassphrase.isEmpty ? 'Set' : 'Change')),
           ).marginOnly(right: 8),
           OutlinedButton(
             onPressed: enabled &&
@@ -1912,12 +1910,37 @@ class _DisplayState extends State<_Display> {
     return ListView(controller: scrollController, children: [
       viewStyle(context),
       scrollStyle(context),
+      toolbarAutoHide(context),
       imageQuality(context),
       codec(context),
       if (isDesktop) trackpadSpeed(context),
       if (!isWeb) privacyModeImpl(context),
       other(context),
     ]).marginOnly(bottom: _kListViewBottomMargin);
+  }
+
+  int _toolbarOptionValue(
+    String key, {
+    required int defaultValue,
+    required int min,
+    required int max,
+  }) {
+    return (int.tryParse(bind.mainGetUserDefaultOption(key: key)) ??
+            defaultValue)
+        .clamp(min, max);
+  }
+
+  Future<void> _setToolbarOptionValue(
+    String key,
+    int value, {
+    required int min,
+    required int max,
+  }) async {
+    final next = value.clamp(min, max);
+    await bind.mainSetUserDefaultOption(key: key, value: next.toString());
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   Widget viewStyle(BuildContext context) {
@@ -1986,6 +2009,52 @@ class _DisplayState extends State<_Display> {
                   : onEdgeScrollEdgeThicknessChanged,
             )),
       ],
+    ]);
+  }
+
+  Widget toolbarAutoHide(BuildContext context) {
+    final revealZonePx = _toolbarOptionValue(
+      kOptionRemoteToolbarRevealZonePx,
+      defaultValue: kDefaultRemoteToolbarRevealZonePx,
+      min: kMinRemoteToolbarRevealZonePx,
+      max: kMaxRemoteToolbarRevealZonePx,
+    );
+    final hideDelayMs = _toolbarOptionValue(
+      kOptionRemoteToolbarHideDelayMs,
+      defaultValue: kDefaultRemoteToolbarHideDelayMs,
+      min: kMinRemoteToolbarHideDelayMs,
+      max: kMaxRemoteToolbarHideDelayMs,
+    );
+
+    return _Card(title: 'Toolbar auto-hide', children: [
+      _IntegerSettingSlider(
+        label: 'Toolbar reveal zone',
+        value: revealZonePx,
+        min: kMinRemoteToolbarRevealZonePx,
+        max: kMaxRemoteToolbarRevealZonePx,
+        unit: 'px',
+        enabled: !isOptionFixed(kOptionRemoteToolbarRevealZonePx),
+        onChanged: (value) => _setToolbarOptionValue(
+          kOptionRemoteToolbarRevealZonePx,
+          value,
+          min: kMinRemoteToolbarRevealZonePx,
+          max: kMaxRemoteToolbarRevealZonePx,
+        ),
+      ),
+      _IntegerSettingSlider(
+        label: 'Toolbar hide delay',
+        value: hideDelayMs,
+        min: kMinRemoteToolbarHideDelayMs,
+        max: kMaxRemoteToolbarHideDelayMs,
+        unit: 'ms',
+        enabled: !isOptionFixed(kOptionRemoteToolbarHideDelayMs),
+        onChanged: (value) => _setToolbarOptionValue(
+          kOptionRemoteToolbarHideDelayMs,
+          value,
+          min: kMinRemoteToolbarHideDelayMs,
+          max: kMaxRemoteToolbarHideDelayMs,
+        ),
+      ),
     ]);
   }
 
@@ -3012,6 +3081,138 @@ Widget _Button(String label, Function() onPressed,
   return Row(children: [
     child,
   ]).marginOnly(left: _kContentHMargin);
+}
+
+class _IntegerSettingSlider extends StatefulWidget {
+  final String label;
+  final int value;
+  final int min;
+  final int max;
+  final String unit;
+  final bool enabled;
+  final ValueChanged<int>? onChanged;
+
+  const _IntegerSettingSlider({
+    required this.label,
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.unit,
+    this.enabled = true,
+    this.onChanged,
+  });
+
+  @override
+  State<_IntegerSettingSlider> createState() => _IntegerSettingSliderState();
+}
+
+class _IntegerSettingSliderState extends State<_IntegerSettingSlider> {
+  late int _value = widget.value;
+
+  @override
+  void didUpdateWidget(covariant _IntegerSettingSlider oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.value != widget.value && widget.value != _value) {
+      _value = widget.value;
+    }
+  }
+
+  void _apply(int value) {
+    final next = value.clamp(widget.min, widget.max);
+    if (next == _value) return;
+    setState(() {
+      _value = next;
+    });
+  }
+
+  void _commit(int value) {
+    final next = value.clamp(widget.min, widget.max);
+    if (next != _value) {
+      setState(() {
+        _value = next;
+      });
+    }
+    widget.onChanged?.call(next);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    const buttonConstraints = BoxConstraints(minWidth: 32, minHeight: 32);
+    final onSliderChanged =
+        widget.enabled ? (double value) => _apply(value.round()) : null;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: _kContentHMargin),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  translate(widget.label),
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+              ),
+              Text(
+                '$_value${widget.unit}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(left: _kContentHMargin),
+          child: Row(
+            children: [
+              Tooltip(
+                message: translate('Decrease'),
+                child: IconButton(
+                  icon: const Icon(Icons.remove),
+                  iconSize: 18,
+                  padding: const EdgeInsets.all(2),
+                  constraints: buttonConstraints,
+                  onPressed: widget.enabled ? () => _commit(_value - 1) : null,
+                ),
+              ),
+              Expanded(
+                child: SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    activeTrackColor: colorScheme.primary,
+                    thumbColor: colorScheme.primary,
+                    overlayColor: colorScheme.primary.withValues(alpha: 0.1),
+                    showValueIndicator: ShowValueIndicator.never,
+                  ),
+                  child: Slider(
+                    value: _value.toDouble(),
+                    min: widget.min.toDouble(),
+                    max: widget.max.toDouble(),
+                    semanticFormatterCallback: (value) =>
+                        '${value.round()}${widget.unit}',
+                    onChanged: onSliderChanged,
+                    onChangeEnd: widget.enabled
+                        ? (value) => _commit(value.round())
+                        : null,
+                  ),
+                ),
+              ),
+              Tooltip(
+                message: translate('Increase'),
+                child: IconButton(
+                  icon: const Icon(Icons.add),
+                  iconSize: 18,
+                  padding: const EdgeInsets.all(2),
+                  constraints: buttonConstraints,
+                  onPressed: widget.enabled ? () => _commit(_value + 1) : null,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 // ignore: non_constant_identifier_names

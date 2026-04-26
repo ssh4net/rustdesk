@@ -594,12 +594,14 @@ class RawPointerMouseRegion extends StatelessWidget {
   final MouseCursor? cursor;
   final PointerEnterEventListener? onEnter;
   final PointerExitEventListener? onExit;
+  final PointerHoverEventListener? onHover;
   final PointerDownEventListener? onPointerDown;
   final PointerUpEventListener? onPointerUp;
 
   RawPointerMouseRegion({
     this.onEnter,
     this.onExit,
+    this.onHover,
     this.cursor,
     this.onPointerDown,
     this.onPointerUp,
@@ -610,7 +612,10 @@ class RawPointerMouseRegion extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Listener(
-      onPointerHover: inputModel.onPointHoverImage,
+      onPointerHover: (evt) {
+        onHover?.call(evt);
+        inputModel.onPointHoverImage(evt);
+      },
       onPointerDown: (evt) {
         onPointerDown?.call(evt);
         inputModel.onPointDownImage(evt);
@@ -641,12 +646,14 @@ class CameraRawPointerMouseRegion extends StatelessWidget {
   final Widget child;
   final PointerEnterEventListener? onEnter;
   final PointerExitEventListener? onExit;
+  final PointerHoverEventListener? onHover;
   final PointerDownEventListener? onPointerDown;
   final PointerUpEventListener? onPointerUp;
 
   CameraRawPointerMouseRegion({
     this.onEnter,
     this.onExit,
+    this.onHover,
     this.onPointerDown,
     this.onPointerUp,
     required this.inputModel,
@@ -657,6 +664,7 @@ class CameraRawPointerMouseRegion extends StatelessWidget {
   Widget build(BuildContext context) {
     return Listener(
       onPointerHover: (evt) {
+        onHover?.call(evt);
         final offset = evt.position;
         double x = offset.dx;
         double y = max(0.0, offset.dy);

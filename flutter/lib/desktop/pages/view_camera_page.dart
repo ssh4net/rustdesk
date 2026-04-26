@@ -86,6 +86,8 @@ class _ViewCameraPageState extends State<ViewCameraPage>
   // to identify the toolbar instance and its callback function.
   int? _instanceIdOnEnterOrLeaveImage4Toolbar;
   Function(bool)? _onEnterOrLeaveImage4Toolbar;
+  int? _instanceIdOnImagePointerState4Toolbar;
+  ToolbarImagePointerHandler? _onImagePointerState4Toolbar;
 
   late FFI _ffi;
 
@@ -270,6 +272,16 @@ class _ViewCameraPageState extends State<ViewCameraPage>
               _onEnterOrLeaveImage4Toolbar = null;
             }
           },
+          onImagePointerStateSetter: (id, func) {
+            _instanceIdOnImagePointerState4Toolbar = id;
+            _onImagePointerState4Toolbar = func;
+          },
+          onImagePointerStateCleaner: (id) {
+            if (_instanceIdOnImagePointerState4Toolbar == id) {
+              _instanceIdOnImagePointerState4Toolbar = null;
+              _onImagePointerState4Toolbar = null;
+            }
+          },
           setRemoteState: setState,
         );
 
@@ -365,6 +377,16 @@ class _ViewCameraPageState extends State<ViewCameraPage>
   void enterView(PointerEnterEvent evt) {
     _cursorOverImage.value = true;
     _firstEnterImage.value = true;
+    if (_onImagePointerState4Toolbar != null) {
+      try {
+        _onImagePointerState4Toolbar!(ToolbarImagePointerState(
+          insideImage: true,
+          localPosition: evt.localPosition,
+        ));
+      } catch (e) {
+        //
+      }
+    }
     if (_onEnterOrLeaveImage4Toolbar != null) {
       try {
         _onEnterOrLeaveImage4Toolbar!(true);
@@ -388,6 +410,14 @@ class _ViewCameraPageState extends State<ViewCameraPage>
 
     _cursorOverImage.value = false;
     _firstEnterImage.value = false;
+    if (_onImagePointerState4Toolbar != null) {
+      try {
+        _onImagePointerState4Toolbar!(
+            const ToolbarImagePointerState(insideImage: false));
+      } catch (e) {
+        //
+      }
+    }
     if (_onEnterOrLeaveImage4Toolbar != null) {
       try {
         _onEnterOrLeaveImage4Toolbar!(false);
@@ -401,13 +431,27 @@ class _ViewCameraPageState extends State<ViewCameraPage>
     }
   }
 
+  void hoverView(PointerHoverEvent evt) {
+    if (_onImagePointerState4Toolbar != null) {
+      try {
+        _onImagePointerState4Toolbar!(ToolbarImagePointerState(
+          insideImage: true,
+          localPosition: evt.localPosition,
+        ));
+      } catch (e) {
+        //
+      }
+    }
+  }
+
   Widget _buildRawTouchAndPointerRegion(
     Widget child,
     PointerEnterEventListener? onEnter,
     PointerExitEventListener? onExit,
+    PointerHoverEventListener? onHover,
   ) {
     return RawTouchGestureDetectorRegion(
-      child: _buildRawPointerMouseRegion(child, onEnter, onExit),
+      child: _buildRawPointerMouseRegion(child, onEnter, onExit, onHover),
       ffi: _ffi,
       isCamera: true,
     );
@@ -417,10 +461,12 @@ class _ViewCameraPageState extends State<ViewCameraPage>
     Widget child,
     PointerEnterEventListener? onEnter,
     PointerExitEventListener? onExit,
+    PointerHoverEventListener? onHover,
   ) {
     return CameraRawPointerMouseRegion(
       onEnter: onEnter,
       onExit: onExit,
+      onHover: onHover,
       onPointerDown: (event) {
         // A double check for blur status.
         // Note: If there's an `onPointerDown` event is triggered, `_isWindowBlur` is expected being false.
@@ -460,7 +506,7 @@ class _ViewCameraPageState extends State<ViewCameraPage>
                     id: widget.id,
                     cursorOverImage: _cursorOverImage,
                     listenerBuilder: (child) => _buildRawTouchAndPointerRegion(
-                        child, enterView, leaveView),
+                        child, enterView, leaveView, hoverView),
                     ffi: _ffi,
                   );
                 }),
@@ -473,7 +519,7 @@ class _ViewCameraPageState extends State<ViewCameraPage>
         top: 10,
         right: 10,
         child: _buildRawTouchAndPointerRegion(
-            QualityMonitor(_ffi.qualityMonitorModel), null, null),
+            QualityMonitor(_ffi.qualityMonitorModel), null, null, null),
       ),
     );
     return Stack(
