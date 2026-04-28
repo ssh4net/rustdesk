@@ -1108,6 +1108,7 @@ class FfiModel with ChangeNotifier {
     final direct = details['direct'] == true;
     final controller = TextEditingController();
     bool obscure = true;
+    bool submitting = false;
     dialogManager.show(
       tag: '$sessionId-input-pairing-passphrase',
       (setState, close, context) {
@@ -1124,6 +1125,10 @@ class FfiModel with ChangeNotifier {
         }
 
         void submit() {
+          if (submitting || controller.text.isEmpty) {
+            return;
+          }
+          submitting = true;
           () async {
             await bind.sessionSubmitDirectPairingPassphrase(
               sessionId: sessionId,
@@ -1198,6 +1203,7 @@ class FfiModel with ChangeNotifier {
               onPressed: controller.text.isEmpty ? null : submit,
             ),
           ],
+          onSubmit: controller.text.isEmpty ? null : submit,
           onCancel: cancel,
         );
       },

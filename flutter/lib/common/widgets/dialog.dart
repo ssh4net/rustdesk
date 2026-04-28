@@ -340,7 +340,19 @@ Future<String> changePairingPassphrase(
 }) async {
   final controller = TextEditingController(text: "");
   final obscure = true.obs;
+  var completed = false;
   await gFFI.dialogManager.show((setState, close, context) {
+    submit() async {
+      if (completed) {
+        return;
+      }
+      completed = true;
+      if (controller.text.isNotEmpty) {
+        await bind.mainSetOption(key: optionKey, value: controller.text);
+      }
+      close();
+    }
+
     return CustomAlertDialog(
       title: Text(translate(title)),
       content: Column(
@@ -383,13 +395,9 @@ Future<String> changePairingPassphrase(
       ),
       actions: [
         dialogButton('Cancel', onPressed: close, isOutline: true),
-        dialogButton('OK', onPressed: () async {
-          if (controller.text.isNotEmpty) {
-            await bind.mainSetOption(key: optionKey, value: controller.text);
-          }
-          close();
-        }),
+        dialogButton('OK', onPressed: submit),
       ],
+      onSubmit: submit,
       onCancel: close,
     );
   });
@@ -2914,6 +2922,169 @@ class TrustedDevice {
     devices.sort((a, b) => b.time.compareTo(a.time));
     return devices;
   }
+}
+
+void confrimDeletePairedViewersDialog(
+    RxList<PairedViewer> pairedViewers, RxList<Uint8List> selectedViewers) {
+  CommonConfirmDialog(gFFI.dialogManager, '${translate('Confirm Delete')}?',
+      () async {
+    if (selectedViewers.isEmpty) return;
+    if (selectedViewers.length == pairedViewers.length) {
+      await bind.mainSetCommon(key: 'clear-paired-viewers', value: '');
+      pairedViewers.clear();
+      selectedViewers.clear();
+    } else {
+      final json = jsonEncode(selectedViewers.map((e) => e.toList()).toList());
+      await bind.mainSetCommon(key: 'remove-paired-viewers', value: json);
+      pairedViewers.removeWhere((element) {
+        return selectedViewers.contains(element.signPk);
+      });
+      selectedViewers.clear();
+    }
+  });
+}
+
+void managePairedViewersDialog() async {
+  RxList<PairedViewer> pairedViewers = (await PairedViewer.get()).obs;
+  RxList<Uint8List> selectedViewers = RxList.empty();
+  gFFI.dialogManager.show((setState, close, context) {
+    return CustomAlertDialog(
+      title: Text(translate("Manage paired viewers")),
+      content: pairedViewersTable(pairedViewers, selectedViewers),
+      actions: [
+        Obx(() => dialogButton(translate("Delete"),
+                onPressed: selectedViewers.isEmpty
+                    ? null
+                    : () {
+                        confrimDeletePairedViewersDialog(
+                          pairedViewers,
+                          selectedViewers,
+                        );
+                      },
+                isOutline: false)
+            .marginOnly(top: 12)),
+        dialogButton(translate("Close"), onPressed: close, isOutline: true)
+            .marginOnly(top: 12),
+      ],
+      onCancel: close,
+    );
+  });
+}
+
+class PairedViewer {
+  late final Uint8List signPk;
+  late final int time;
+  late final String id;
+  late final String name;
+  late final String platform;
+  late final String scope;
+
+  PairedViewer.fromJson(Map<String, dynamic> json) {
+    final signPkList = json['sign_pk'] as List<dynamic>;
+    signPk = Uint8List.fromList(signPkList.cast<int>());
+    time = json['time'];
+    id = json['id'];
+    name = json['name'] ?? '';
+    platform = json['platform'] ?? '';
+    scope = json['scope'] ?? '';
+  }
+
+  String daysRemaining() {
+    final expiry = time + 30 * 24 * 60 * 60 * 1000;
+    final remaining = expiry - DateTime.now().millisecondsSinceEpoch;
+    if (remaining < 0) {
+      return '0';
+    }
+    return (remaining / (24 * 60 * 60 * 1000)).toStringAsFixed(0);
+  }
+
+  String keyFingerprint() {
+    final prefix = signPk.take(8).map((v) {
+      return v.toRadixString(16).padLeft(2, '0');
+    }).join(':');
+    return signPk.length > 8 ? '$prefix...' : prefix;
+  }
+
+  static Future<List<PairedViewer>> get() async {
+    final List<PairedViewer> viewers = List.empty(growable: true);
+    try {
+      final viewersJson = await bind.mainGetCommon(key: 'paired-viewers');
+      if (viewersJson.isNotEmpty) {
+        final viewersList = json.decode(viewersJson);
+        if (viewersList is List) {
+          for (var viewer in viewersList) {
+            viewers.add(PairedViewer.fromJson(viewer));
+          }
+        }
+      }
+    } catch (e) {
+      print(e.toString());
+    }
+    viewers.sort((a, b) => b.time.compareTo(a.time));
+    return viewers;
+  }
+}
+
+Widget pairedViewersTable(
+    RxList<PairedViewer> viewers, RxList<Uint8List> selectedViewers) {
+  RxBool selectAll = false.obs;
+  setSelectAll() {
+    if (selectedViewers.isNotEmpty &&
+        selectedViewers.length == viewers.length) {
+      selectAll.value = true;
+    } else {
+      selectAll.value = false;
+    }
+  }
+
+  viewers.listen((_) {
+    setSelectAll();
+  });
+  selectedViewers.listen((_) {
+    setSelectAll();
+  });
+  return FittedBox(
+    child: Obx(() => DataTable(
+          columns: [
+            DataColumn(
+                label: Checkbox(
+              value: selectAll.value,
+              onChanged: (value) {
+                if (value == true) {
+                  selectedViewers.clear();
+                  selectedViewers.addAll(viewers.map((e) => e.signPk));
+                } else {
+                  selectedViewers.clear();
+                }
+              },
+            )),
+            DataColumn(label: Text(translate('Scope'))),
+            DataColumn(label: Text(translate('ID'))),
+            DataColumn(label: Text(translate('Key'))),
+            DataColumn(label: Text(translate('Days remaining'))),
+          ],
+          rows: viewers.map((viewer) {
+            return DataRow(cells: [
+              DataCell(Checkbox(
+                value: selectedViewers.contains(viewer.signPk),
+                onChanged: (value) {
+                  if (value == null) return;
+                  if (value) {
+                    selectedViewers.remove(viewer.signPk);
+                    selectedViewers.add(viewer.signPk);
+                  } else {
+                    selectedViewers.remove(viewer.signPk);
+                  }
+                },
+              )),
+              DataCell(Text(viewer.scope.isEmpty ? '-' : viewer.scope)),
+              DataCell(Text(viewer.id.isEmpty ? '-' : viewer.id)),
+              DataCell(Text(viewer.keyFingerprint())),
+              DataCell(Text(viewer.daysRemaining())),
+            ]);
+          }).toList(),
+        )),
+  );
 }
 
 Widget trustedDevicesTable(

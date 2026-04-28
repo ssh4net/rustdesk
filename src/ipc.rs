@@ -374,6 +374,8 @@ pub enum Data {
     HwCodecConfig(Option<String>),
     RemoveTrustedDevices(Vec<Bytes>),
     ClearTrustedDevices,
+    RemovePairedViewers(Vec<Bytes>),
+    ClearPairedViewers,
     #[cfg(all(target_os = "windows", feature = "flutter"))]
     PrinterData(Vec<u8>),
     InstallOption(Option<(String, String)>),
@@ -684,6 +686,8 @@ async fn handle(data: Data, stream: &mut Connection) {
                     value = Some(Config::get_unlock_pin());
                 } else if name == "trusted-devices" {
                     value = Some(Config::get_trusted_devices_json());
+                } else if name == "paired-viewers" {
+                    value = Some(Config::get_paired_viewers_json());
                 } else {
                     value = None;
                 }
@@ -867,6 +871,12 @@ async fn handle(data: Data, stream: &mut Connection) {
         }
         Data::ClearTrustedDevices => {
             Config::clear_trusted_devices();
+        }
+        Data::RemovePairedViewers(v) => {
+            Config::remove_paired_viewers(&v);
+        }
+        Data::ClearPairedViewers => {
+            Config::clear_paired_viewers();
         }
         Data::InstallOption(opt) => match opt {
             Some((_k, _v)) => {
@@ -1334,6 +1344,30 @@ pub fn remove_trusted_devices(hwids: Vec<Bytes>) {
 pub fn clear_trusted_devices() {
     Config::clear_trusted_devices();
     allow_err!(set_data(&Data::ClearTrustedDevices));
+}
+
+#[cfg(feature = "flutter")]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn get_paired_viewers() -> String {
+    if let Ok(Some(v)) = get_config("paired-viewers") {
+        v
+    } else {
+        Config::get_paired_viewers_json()
+    }
+}
+
+#[cfg(feature = "flutter")]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn remove_paired_viewers(sign_pks: Vec<Bytes>) {
+    Config::remove_paired_viewers(&sign_pks);
+    allow_err!(set_data(&Data::RemovePairedViewers(sign_pks)));
+}
+
+#[cfg(feature = "flutter")]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn clear_paired_viewers() {
+    Config::clear_paired_viewers();
+    allow_err!(set_data(&Data::ClearPairedViewers));
 }
 
 pub fn get_id() -> String {

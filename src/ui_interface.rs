@@ -1675,6 +1675,31 @@ pub fn clear_trusted_devices() {
 }
 
 #[cfg(feature = "flutter")]
+pub fn get_paired_viewers() -> String {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    return Config::get_paired_viewers_json();
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    return ipc::get_paired_viewers();
+}
+
+#[cfg(feature = "flutter")]
+pub fn remove_paired_viewers(json: &str) {
+    let sign_pks = serde_json::from_str::<Vec<Bytes>>(json).unwrap_or_default();
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    Config::remove_paired_viewers(&sign_pks);
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    ipc::remove_paired_viewers(sign_pks);
+}
+
+#[cfg(feature = "flutter")]
+pub fn clear_paired_viewers() {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    Config::clear_paired_viewers();
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    ipc::clear_paired_viewers();
+}
+
+#[cfg(feature = "flutter")]
 pub fn max_encrypt_len() -> usize {
     hbb_common::config::ENCRYPT_MAX_LEN
 }

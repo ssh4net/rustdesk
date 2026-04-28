@@ -1163,9 +1163,15 @@ const TRUST_PHRASE_WORDS: [&str; 64] = [
 const SECURE_SIGNED_ID_V2_MAGIC: &[u8; 8] = b"RDSECV2\0";
 const DIRECT_SIGNED_ID_V2_MAGIC: &[u8; 8] = b"RDDIRV2\0";
 const DIRECT_PUBLIC_KEY_V2_MAGIC: &[u8; 8] = b"RDPUBV2\0";
+const DIRECT_PUBLIC_KEY_V3_MAGIC: &[u8; 8] = b"RDPUBV3\0";
 const DIRECT_HANDSHAKE_ACK_OK: &[u8] = b"direct-ok";
 const DIRECT_HANDSHAKE_FLAG_PAIRING_REQUIRED: u8 = 0x01;
+const DIRECT_HANDSHAKE_FLAG_PAIRED_VIEWER_IDENTITY: u8 = 0x02;
+const DIRECT_PUBLIC_KEY_FLAG_PAIRING_PROOF: u8 = 0x01;
+const DIRECT_PUBLIC_KEY_FLAG_INITIATOR_ID: u8 = 0x02;
 const DIRECT_PAIRING_PROOF_LEN: usize = 32;
+pub const DIRECT_PAIRING_SCOPE: &str = "direct";
+const PEER_OPTION_DIRECT_PAIRED_VIEWER_CONFIRMED: &str = "direct-paired-viewer-confirmed";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectSignedId {
@@ -1174,6 +1180,7 @@ pub struct DirectSignedId {
     pub box_pk: [u8; 32],
     pub pairing_required: bool,
     pub pairing_salt: Option<[u8; argon2id13::SALTBYTES]>,
+    pub supports_paired_viewer_identity: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1182,6 +1189,13 @@ pub struct SecureSignedId {
     pub box_pk: [u8; 32],
     pub pairing_required: bool,
     pub pairing_salt: Option<[u8; argon2id13::SALTBYTES]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectPublicKeyPayload {
+    pub pairing_proof: Option<[u8; DIRECT_PAIRING_PROOF_LEN]>,
+    pub initiator: Option<DirectSignedId>,
+    pub symmetric_value: Vec<u8>,
 }
 
 pub fn get_network_mode_info() -> NetworkModeInfo {
@@ -2383,6 +2397,36 @@ pub fn clear_pinned_peer_signing_key(peer_config_id: &str) -> bool {
     }
 }
 
+pub fn has_confirmed_direct_paired_viewer(peer_config_id: &str) -> bool {
+    let config = PeerConfig::load(peer_config_id);
+    config
+        .options
+        .get(PEER_OPTION_DIRECT_PAIRED_VIEWER_CONFIRMED)
+        .is_some_and(|value| value == "Y")
+}
+
+pub fn set_confirmed_direct_paired_viewer(peer_config_id: &str, confirmed: bool) {
+    let mut config = PeerConfig::load(peer_config_id);
+    let changed = if confirmed {
+        config
+            .options
+            .insert(
+                PEER_OPTION_DIRECT_PAIRED_VIEWER_CONFIRMED.to_owned(),
+                "Y".to_owned(),
+            )
+            .as_deref()
+            != Some("Y")
+    } else {
+        config
+            .options
+            .remove(PEER_OPTION_DIRECT_PAIRED_VIEWER_CONFIRMED)
+            .is_some()
+    };
+    if changed {
+        config.store(peer_config_id);
+    }
+}
+
 pub fn ensure_pinned_peer_signing_key(peer_config_id: &str, pk: &[u8]) -> ResultType<()> {
     pin_peer_signing_key(peer_config_id, pk)
 }
@@ -2675,7 +2719,9 @@ pub fn create_direct_signed_id_with_pairing(
     .write_to_bytes()
     .unwrap_or_default();
     let mut signed_payload = Vec::with_capacity(2 + pairing_salt.len() + id_pk.len());
-    signed_payload.push(DIRECT_HANDSHAKE_FLAG_PAIRING_REQUIRED);
+    signed_payload.push(
+        DIRECT_HANDSHAKE_FLAG_PAIRING_REQUIRED | DIRECT_HANDSHAKE_FLAG_PAIRED_VIEWER_IDENTITY,
+    );
     signed_payload.push(pairing_salt.len() as u8);
     signed_payload.extend_from_slice(&pairing_salt);
     signed_payload.extend_from_slice(&id_pk);
@@ -2715,6 +2761,8 @@ pub fn decode_direct_id_pk(payload: &[u8]) -> ResultType<DirectSignedId> {
             bail!("Handshake failed: truncated direct handshake metadata");
         }
         let pairing_required = flags & DIRECT_HANDSHAKE_FLAG_PAIRING_REQUIRED != 0;
+        let supports_paired_viewer_identity =
+            flags & DIRECT_HANDSHAKE_FLAG_PAIRED_VIEWER_IDENTITY != 0;
         let pairing_salt = if pairing_required {
             if salt_len != argon2id13::SALTBYTES {
                 bail!("Handshake failed: invalid direct pairing salt length");
@@ -2735,6 +2783,7 @@ pub fn decode_direct_id_pk(payload: &[u8]) -> ResultType<DirectSignedId> {
             box_pk: pk,
             pairing_required,
             pairing_salt,
+            supports_paired_viewer_identity,
         });
     }
     if payload.len() <= sign::PUBLICKEYBYTES {
@@ -2756,6 +2805,7 @@ pub fn decode_direct_id_pk(payload: &[u8]) -> ResultType<DirectSignedId> {
         box_pk: pk,
         pairing_required: false,
         pairing_salt: None,
+        supports_paired_viewer_identity: false,
     })
 }
 
@@ -2784,12 +2834,127 @@ pub fn wrap_direct_public_key_symmetric_value(
     out.into()
 }
 
-pub fn unwrap_direct_public_key_symmetric_value(
+pub fn create_direct_public_key_initiator_id(id: &str, box_pk: &[u8]) -> ResultType<Bytes> {
+    let Some(box_pk) = get_pk(box_pk) else {
+        bail!("Handshake failed: invalid local public key length");
+    };
+    let (sign_pk, sign_sk) = get_local_signing_keypair()?;
+    Ok(create_direct_signed_id(id, box_pk, &sign_pk, &sign_sk))
+}
+
+pub fn validate_direct_public_key_initiator(
+    initiator: &DirectSignedId,
+    asymmetric_value: &[u8],
+) -> ResultType<()> {
+    let Some(box_pk) = get_pk(asymmetric_value) else {
+        bail!("Handshake failed: invalid initiator public key length");
+    };
+    if initiator.box_pk != box_pk {
+        bail!("Handshake failed: initiator identity does not match public key");
+    }
+    Ok(())
+}
+
+pub fn wrap_direct_public_key_symmetric_value_with_identity(
+    sealed_key: &[u8],
+    pairing_proof: Option<[u8; DIRECT_PAIRING_PROOF_LEN]>,
+    initiator_signed_id: Option<&[u8]>,
+) -> ResultType<Bytes> {
+    let Some(initiator_signed_id) = initiator_signed_id else {
+        return Ok(wrap_direct_public_key_symmetric_value(
+            sealed_key,
+            pairing_proof,
+        ));
+    };
+    let initiator_len = u16::try_from(initiator_signed_id.len())
+        .map_err(|_| anyhow!("Handshake failed: initiator identity too large"))?;
+    let mut flags = DIRECT_PUBLIC_KEY_FLAG_INITIATOR_ID;
+    let proof_len = if pairing_proof.is_some() {
+        flags |= DIRECT_PUBLIC_KEY_FLAG_PAIRING_PROOF;
+        DIRECT_PAIRING_PROOF_LEN
+    } else {
+        0
+    };
+    let mut out = Vec::with_capacity(
+        DIRECT_PUBLIC_KEY_V3_MAGIC.len()
+            + 1
+            + proof_len
+            + std::mem::size_of::<u16>()
+            + initiator_signed_id.len()
+            + sealed_key.len(),
+    );
+    out.extend_from_slice(DIRECT_PUBLIC_KEY_V3_MAGIC);
+    out.push(flags);
+    if let Some(pairing_proof) = pairing_proof {
+        out.extend_from_slice(&pairing_proof);
+    }
+    out.extend_from_slice(&initiator_len.to_be_bytes());
+    out.extend_from_slice(initiator_signed_id);
+    out.extend_from_slice(sealed_key);
+    Ok(out.into())
+}
+
+pub fn unwrap_direct_public_key_payload(
     payload: &[u8],
     pairing_required: bool,
-) -> ResultType<(Option<[u8; DIRECT_PAIRING_PROOF_LEN]>, Vec<u8>)> {
+) -> ResultType<DirectPublicKeyPayload> {
+    if payload.starts_with(DIRECT_PUBLIC_KEY_V3_MAGIC) {
+        let mut offset = DIRECT_PUBLIC_KEY_V3_MAGIC.len();
+        if payload.len() <= offset {
+            bail!("Handshake failed: missing direct public key flags");
+        }
+        let flags = payload[offset];
+        offset += 1;
+        if flags & !(DIRECT_PUBLIC_KEY_FLAG_PAIRING_PROOF | DIRECT_PUBLIC_KEY_FLAG_INITIATOR_ID)
+            != 0
+        {
+            bail!("Handshake failed: invalid direct public key flags");
+        }
+        let pairing_proof = if flags & DIRECT_PUBLIC_KEY_FLAG_PAIRING_PROOF != 0 {
+            if payload.len() < offset + DIRECT_PAIRING_PROOF_LEN {
+                bail!("Handshake failed: truncated direct pairing proof");
+            }
+            let mut proof = [0u8; DIRECT_PAIRING_PROOF_LEN];
+            proof.copy_from_slice(&payload[offset..offset + DIRECT_PAIRING_PROOF_LEN]);
+            offset += DIRECT_PAIRING_PROOF_LEN;
+            Some(proof)
+        } else {
+            None
+        };
+        let initiator = if flags & DIRECT_PUBLIC_KEY_FLAG_INITIATOR_ID != 0 {
+            if payload.len() < offset + std::mem::size_of::<u16>() {
+                bail!("Handshake failed: missing direct initiator identity length");
+            }
+            let initiator_len = u16::from_be_bytes([payload[offset], payload[offset + 1]]) as usize;
+            offset += std::mem::size_of::<u16>();
+            if initiator_len == 0 || payload.len() < offset + initiator_len {
+                bail!("Handshake failed: truncated direct initiator identity");
+            }
+            let initiator = decode_direct_id_pk(&payload[offset..offset + initiator_len])
+                .map_err(|e| anyhow!("Handshake failed: invalid direct initiator identity: {e}"))?;
+            offset += initiator_len;
+            Some(initiator)
+        } else {
+            None
+        };
+        if pairing_required && pairing_proof.is_none() && initiator.is_none() {
+            bail!("Handshake failed: missing direct pairing proof");
+        }
+        if payload.len() <= offset {
+            bail!("Handshake failed: missing encrypted direct session key");
+        }
+        return Ok(DirectPublicKeyPayload {
+            pairing_proof,
+            initiator,
+            symmetric_value: payload[offset..].to_vec(),
+        });
+    }
     if !pairing_required {
-        return Ok((None, payload.to_vec()));
+        return Ok(DirectPublicKeyPayload {
+            pairing_proof: None,
+            initiator: None,
+            symmetric_value: payload.to_vec(),
+        });
     }
     let header_len = DIRECT_PUBLIC_KEY_V2_MAGIC.len() + DIRECT_PAIRING_PROOF_LEN;
     if payload.len() <= header_len || !payload.starts_with(DIRECT_PUBLIC_KEY_V2_MAGIC) {
@@ -2800,7 +2965,19 @@ pub fn unwrap_direct_public_key_symmetric_value(
         &payload[DIRECT_PUBLIC_KEY_V2_MAGIC.len()
             ..DIRECT_PUBLIC_KEY_V2_MAGIC.len() + DIRECT_PAIRING_PROOF_LEN],
     );
-    Ok((Some(proof), payload[header_len..].to_vec()))
+    Ok(DirectPublicKeyPayload {
+        pairing_proof: Some(proof),
+        initiator: None,
+        symmetric_value: payload[header_len..].to_vec(),
+    })
+}
+
+pub fn unwrap_direct_public_key_symmetric_value(
+    payload: &[u8],
+    pairing_required: bool,
+) -> ResultType<(Option<[u8; DIRECT_PAIRING_PROOF_LEN]>, Vec<u8>)> {
+    let payload = unwrap_direct_public_key_payload(payload, pairing_required)?;
+    Ok((payload.pairing_proof, payload.symmetric_value))
 }
 
 pub fn create_direct_pairing_salt() -> [u8; argon2id13::SALTBYTES] {
@@ -4192,6 +4369,7 @@ mod tests {
         assert_eq!(decoded.box_pk, box_pk.0);
         assert!(!decoded.pairing_required);
         assert!(decoded.pairing_salt.is_none());
+        assert!(!decoded.supports_paired_viewer_identity);
     }
 
     #[test]
@@ -4207,6 +4385,35 @@ mod tests {
         assert_eq!(decoded.box_pk, box_pk.0);
         assert!(decoded.pairing_required);
         assert_eq!(decoded.pairing_salt, Some(salt));
+        assert!(decoded.supports_paired_viewer_identity);
+    }
+
+    #[test]
+    fn test_decode_direct_signed_id_without_paired_viewer_capability() {
+        let (sign_pk, sign_sk) = sign::gen_keypair();
+        let (box_pk, _) = box_::gen_keypair();
+        let salt = create_direct_pairing_salt();
+        let id_pk = IdPk {
+            id: "peer-id".to_owned(),
+            pk: Bytes::from(box_pk.0.to_vec()),
+            ..Default::default()
+        }
+        .write_to_bytes()
+        .unwrap_or_default();
+        let mut signed_payload = Vec::with_capacity(2 + salt.len() + id_pk.len());
+        signed_payload.push(DIRECT_HANDSHAKE_FLAG_PAIRING_REQUIRED);
+        signed_payload.push(salt.len() as u8);
+        signed_payload.extend_from_slice(&salt);
+        signed_payload.extend_from_slice(&id_pk);
+        let mut payload = Vec::new();
+        payload.extend_from_slice(DIRECT_SIGNED_ID_V2_MAGIC);
+        payload.extend_from_slice(&sign_pk.0);
+        payload.extend_from_slice(&sign::sign(&signed_payload, &sign_sk));
+
+        let decoded = decode_direct_id_pk(&payload).unwrap();
+        assert!(decoded.pairing_required);
+        assert_eq!(decoded.pairing_salt, Some(salt));
+        assert!(!decoded.supports_paired_viewer_identity);
     }
 
     #[test]
@@ -4260,6 +4467,30 @@ mod tests {
             unwrap_direct_public_key_symmetric_value(&wrapped, true).unwrap();
         assert_eq!(decoded_proof, Some(proof));
         assert_eq!(decoded_key, sealed_key);
+    }
+
+    #[test]
+    fn test_wrap_direct_public_key_symmetric_value_with_identity_roundtrip() {
+        let proof = [7u8; DIRECT_PAIRING_PROOF_LEN];
+        let sealed_key = vec![9u8, 8, 7, 6];
+        let (sign_pk, sign_sk) = sign::gen_keypair();
+        let box_pk = [3u8; box_::PUBLICKEYBYTES];
+        let initiator = create_direct_signed_id("viewer-id", box_pk, &sign_pk.0, &sign_sk);
+        let wrapped = wrap_direct_public_key_symmetric_value_with_identity(
+            &sealed_key,
+            Some(proof),
+            Some(&initiator),
+        )
+        .unwrap();
+        let decoded = unwrap_direct_public_key_payload(&wrapped, true).unwrap();
+        assert_eq!(decoded.pairing_proof, Some(proof));
+        assert_eq!(decoded.symmetric_value, sealed_key);
+
+        let initiator = decoded.initiator.unwrap();
+        assert_eq!(initiator.id, "viewer-id");
+        assert_eq!(initiator.sign_pk, sign_pk.0);
+        assert_eq!(initiator.box_pk, box_pk);
+        validate_direct_public_key_initiator(&initiator, &box_pk).unwrap();
     }
 
     #[test]

@@ -15,8 +15,8 @@ use hbb_common::{
     allow_err,
     anyhow::Context,
     bail,
-    config::{Config, CONNECT_TIMEOUT, RELAY_PORT},
-    log,
+    config::{keys, Config, PairedViewer, CONNECT_TIMEOUT, RELAY_PORT},
+    get_time, log,
     message_proto::*,
     protobuf::{Enum, Message as _},
     rendezvous_proto::*,
@@ -309,42 +309,98 @@ async fn create_tcp_connection_with_mode(
                 };
                 if public_key.asymmetric_value.len() == box_::PUBLICKEYBYTES {
                     if handshake_mode == HandshakeMode::Direct || pairing_salt.is_some() {
-                        let (pairing_proof, symmetric_value) =
-                            crate::common::unwrap_direct_public_key_symmetric_value(
-                                &public_key.symmetric_value,
-                                pairing_salt.is_some(),
-                            )?;
+                        let public_key_payload = crate::common::unwrap_direct_public_key_payload(
+                            &public_key.symmetric_value,
+                            pairing_salt.is_some(),
+                        )?;
                         let key = tcp::Encrypt::decode(
-                            &symmetric_value,
+                            &public_key_payload.symmetric_value,
                             &public_key.asymmetric_value,
                             &our_sk_b,
                         )?;
                         if let Some(pairing_salt) = pairing_salt {
-                            let Some(pairing_proof) = pairing_proof else {
-                                bail!("Handshake failed: missing pairing proof");
-                            };
+                            let remember_paired_viewers =
+                                Config::get_bool_option(keys::OPTION_REMEMBER_PAIRED_VIEWERS);
                             let mut their_pk_b = [0u8; box_::PUBLICKEYBYTES];
                             their_pk_b.copy_from_slice(&public_key.asymmetric_value);
-                            let expected_proof = crate::common::compute_direct_pairing_proof(
-                                &pairing_passphrase,
-                                &pairing_salt,
-                                &Config::get_id(),
-                                &local_sign_pk,
-                                &our_pk_b.0,
-                                &their_pk_b,
-                            )?;
                             stream.set_key(key);
                             let mut ack = Message::new();
-                            if pairing_proof != expected_proof {
+                            let mut paired_initiator = None;
+                            let mut error_text = None;
+                            if let Some(pairing_proof) = public_key_payload.pairing_proof {
+                                let expected_proof = crate::common::compute_direct_pairing_proof(
+                                    &pairing_passphrase,
+                                    &pairing_salt,
+                                    &Config::get_id(),
+                                    &local_sign_pk,
+                                    &our_pk_b.0,
+                                    &their_pk_b,
+                                )?;
+                                if pairing_proof == expected_proof {
+                                    if handshake_mode == HandshakeMode::Direct
+                                        && remember_paired_viewers
+                                    {
+                                        if let Some(initiator) =
+                                            public_key_payload.initiator.as_ref()
+                                        {
+                                            crate::common::validate_direct_public_key_initiator(
+                                                initiator,
+                                                &public_key.asymmetric_value,
+                                            )?;
+                                            paired_initiator = Some(initiator.clone());
+                                        }
+                                    }
+                                } else {
+                                    error_text = Some(
+                                        "Handshake failed: pairing passphrase rejected".to_owned(),
+                                    );
+                                }
+                            } else if handshake_mode == HandshakeMode::Direct {
+                                let trusted = if remember_paired_viewers {
+                                    if let Some(initiator) = public_key_payload.initiator.as_ref() {
+                                        crate::common::validate_direct_public_key_initiator(
+                                            initiator,
+                                            &public_key.asymmetric_value,
+                                        )?;
+                                        Config::has_paired_viewer(
+                                            crate::common::DIRECT_PAIRING_SCOPE,
+                                            &initiator.id,
+                                            &initiator.sign_pk,
+                                        )
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                };
+                                if !trusted {
+                                    error_text = Some(
+                                        "Handshake failed: pairing passphrase required".to_owned(),
+                                    );
+                                }
+                            } else {
+                                error_text =
+                                    Some("Handshake failed: missing pairing proof".to_owned());
+                            }
+                            if let Some(error_text) = error_text {
                                 ack.set_message_box(MessageBox {
                                     msgtype: "error".to_owned(),
                                     title: "Connection Error".to_owned(),
-                                    text: "Handshake failed: pairing passphrase rejected"
-                                        .to_owned(),
+                                    text: error_text.clone(),
                                     ..Default::default()
                                 });
                                 timeout(CONNECT_TIMEOUT, stream.send(&ack)).await??;
-                                bail!("Handshake failed: pairing passphrase rejected");
+                                bail!("{}", error_text);
+                            }
+                            if let Some(initiator) = paired_initiator {
+                                Config::add_paired_viewer(PairedViewer {
+                                    sign_pk: Bytes::from(initiator.sign_pk.to_vec()),
+                                    time: get_time(),
+                                    id: initiator.id,
+                                    name: String::new(),
+                                    platform: String::new(),
+                                    scope: crate::common::DIRECT_PAIRING_SCOPE.to_owned(),
+                                });
                             }
                             ack.set_signed_id(SignedId {
                                 id: crate::common::direct_handshake_ack_ok(),

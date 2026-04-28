@@ -79,6 +79,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
   var _onlyWhiteList = false;
   var _enableDirectIPAccess = false;
   var _directAccessPairingPassphraseSet = false;
+  var _rememberPairedViewers = true;
   var _peerPairingPassphraseSet = false;
   var _enableRecordSession = false;
   var _enableHardwareCodec = false;
@@ -118,6 +119,8 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
     _directAccessPairingPassphraseSet = bind
         .mainGetOptionSync(key: kOptionDirectAccessPairingPassphrase)
         .isNotEmpty;
+    _rememberPairedViewers =
+        mainGetBoolOptionSync(kOptionRememberPairedViewers);
     _peerPairingPassphraseSet =
         bind.mainGetOptionSync(key: kOptionPeerPairingPassphrase).isNotEmpty;
     _enableRecordSession = option2bool(kOptionEnableRecordSession,
@@ -376,8 +379,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
         title: 'LAN discovery',
         list: [
           _RadioEntry('Off', kLanDiscoveryModeOff),
-          _RadioEntry(
-              'Trusted Peers Only', kLanDiscoveryModeTrustedPeersOnly),
+          _RadioEntry('Trusted Peers Only', kLanDiscoveryModeTrustedPeersOnly),
           _RadioEntry('Standard', kLanDiscoveryModeStandard),
         ],
         getter: () => _lanDiscoveryMode,
@@ -509,6 +511,28 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                 setState(() {});
               },
       ),
+      if (_enableDirectIPAccess)
+        SettingsTile.switchTile(
+          title: Text(translate('Remember paired viewers')),
+          initialValue: _rememberPairedViewers,
+          onToggle: isOptionFixed(kOptionRememberPairedViewers)
+              ? null
+              : (v) async {
+                  mainSetBoolOption(kOptionRememberPairedViewers, v);
+                  setState(() {
+                    _rememberPairedViewers = v;
+                  });
+                },
+        ),
+      if (_enableDirectIPAccess)
+        SettingsTile(
+            title: Text(translate('Manage paired viewers')),
+            trailing: Icon(Icons.arrow_forward_ios),
+            onPressed: (context) {
+              Navigator.push(context, MaterialPageRoute(builder: (context) {
+                return const _ManagePairedViewers();
+              }));
+            }),
       SettingsTile(
         title: Text(translate("Peer pairing passphrase")),
         value: Padding(
@@ -1347,6 +1371,51 @@ class __ManageTrustedDevicesState extends State<_ManageTrustedDevices> {
             final devices = snapshot.data as List<TrustedDevice>;
             trustedDevices = devices.obs;
             return trustedDevicesTable(trustedDevices, selectedDevices);
+          }),
+    );
+  }
+}
+
+class _ManagePairedViewers extends StatefulWidget {
+  const _ManagePairedViewers();
+
+  @override
+  State<_ManagePairedViewers> createState() => __ManagePairedViewersState();
+}
+
+class __ManagePairedViewersState extends State<_ManagePairedViewers> {
+  RxList<PairedViewer> pairedViewers = RxList.empty(growable: true);
+  RxList<Uint8List> selectedViewers = RxList.empty();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(translate('Manage paired viewers')),
+        centerTitle: true,
+        actions: [
+          Obx(() => IconButton(
+              icon: Icon(Icons.delete, color: Colors.white),
+              onPressed: selectedViewers.isEmpty
+                  ? null
+                  : () {
+                      confrimDeletePairedViewersDialog(
+                          pairedViewers, selectedViewers);
+                    }))
+        ],
+      ),
+      body: FutureBuilder(
+          future: PairedViewer.get(),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return Center(child: CircularProgressIndicator());
+            }
+            if (snapshot.hasError) {
+              return Center(child: Text('Error: ${snapshot.error}'));
+            }
+            final viewers = snapshot.data as List<PairedViewer>;
+            pairedViewers = viewers.obs;
+            return pairedViewersTable(pairedViewers, selectedViewers);
           }),
     );
   }

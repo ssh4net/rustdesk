@@ -1409,6 +1409,8 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
               bind.mainGetOptionSync(key: kOptionDirectAccessPairingPassphrase);
           final isPairingOptFixed =
               isOptionFixed(kOptionDirectAccessPairingPassphrase);
+          final isRememberPairedViewersFixed =
+              isOptionFixed(kOptionRememberPairedViewers);
           return Offstage(
             offstage: !enabled,
             child: Column(
@@ -1500,6 +1502,34 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                   ),
                   enabled: enabled && !locked && !isPairingOptFixed,
                 ),
+                Row(
+                  children: [
+                    Flexible(
+                      child: Tooltip(
+                        waitDuration: const Duration(milliseconds: 300),
+                        message: translate(
+                            'Remember successful local pairings so this device can reconnect without entering the pairing passphrase again.'),
+                        child: _OptionCheckBox(
+                          context,
+                          'Remember paired viewers',
+                          kOptionRememberPairedViewers,
+                          enabled: enabled &&
+                              !locked &&
+                              !isRememberPairedViewersFixed,
+                          update: (_) => setState(() {}),
+                        ),
+                      ),
+                    ),
+                    ElevatedButton(
+                      onPressed: enabled && !locked
+                          ? () {
+                              managePairedViewersDialog();
+                            }
+                          : null,
+                      child: Text(translate('Manage paired viewers')),
+                    )
+                  ],
+                ).marginOnly(left: 30),
               ],
             ),
           );

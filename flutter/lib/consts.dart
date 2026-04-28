@@ -101,6 +101,7 @@ const String kOptionDirectAccessPort = "direct-access-port";
 const String kOptionDirectAccessPairingPassphrase =
     "direct-access-pairing-passphrase";
 const String kOptionPeerPairingPassphrase = "peer-pairing-passphrase";
+const String kOptionRememberPairedViewers = "remember-paired-viewers";
 const String kOptionAllowUnverifiedPeerTrust = "allow-unverified-peer-trust";
 const String kLanDiscoveryModeOff = "off";
 const String kLanDiscoveryModeTrustedPeersOnly = "trusted-only";

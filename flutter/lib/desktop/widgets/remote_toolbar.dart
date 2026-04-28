@@ -1303,13 +1303,12 @@ class _DisplayMenuState extends State<_DisplayMenu> {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
     _screenAdjustor.updateScreen();
     menuChildrenGetter(_IconSubmenuButtonState state) {
       final menuChildren = <Widget>[
         _screenAdjustor.adjustWindow(context),
         viewStyle(customPercent: _customPercent),
-        scrollStyle(state, colorScheme),
+        scrollStyle(state),
         imageQuality(),
         codec(),
         if (ffi.connType == ConnType.defaultConn)
@@ -1439,7 +1438,7 @@ class _DisplayMenuState extends State<_DisplayMenu> {
     });
   }
 
-  scrollStyle(_IconSubmenuButtonState state, ColorScheme colorScheme) {
+  scrollStyle(_IconSubmenuButtonState state) {
     return futureBuilder(future: () async {
       final viewStyle =
           await bind.sessionGetViewStyle(sessionId: ffi.sessionId) ?? '';
@@ -1447,35 +1446,20 @@ class _DisplayMenuState extends State<_DisplayMenu> {
           viewStyle == kRemoteViewStyleCustom;
       final scrollStyle =
           await bind.sessionGetScrollStyle(sessionId: ffi.sessionId) ?? '';
-      final edgeScrollEdgeThickness = await bind
-          .sessionGetEdgeScrollEdgeThickness(sessionId: ffi.sessionId);
       return {
         'visible': visible,
         'scrollStyle': scrollStyle,
-        'edgeScrollEdgeThickness': edgeScrollEdgeThickness,
       };
     }(), hasData: (data) {
       final visible = data['visible'] as bool;
       if (!visible) return Offstage();
       final groupValue = data['scrollStyle'] as String;
-      final edgeScrollEdgeThickness = data['edgeScrollEdgeThickness'] as int;
-      final usesEdgeThickness = groupValue == kRemoteScrollStyleEdge ||
-          groupValue == kRemoteScrollStyleEdgeAcceleration;
 
       onChangeScrollStyle(String? value) async {
         if (value == null) return;
         await bind.sessionSetScrollStyle(
             sessionId: ffi.sessionId, value: value);
         widget.ffi.canvasModel.updateScrollStyle();
-        state.setState(() {});
-      }
-
-      onChangeEdgeScrollEdgeThickness(double? value) async {
-        if (value == null) return;
-        final newThickness = value.round();
-        await bind.sessionSetEdgeScrollEdgeThickness(
-            sessionId: ffi.sessionId, value: newThickness);
-        widget.ffi.canvasModel.updateEdgeScrollEdgeThickness(newThickness);
         state.setState(() {});
       }
 
@@ -1487,7 +1471,6 @@ class _DisplayMenuState extends State<_DisplayMenu> {
               onChanged: widget.ffi.canvasModel.imageOverflow.value
                   ? (value) => onChangeScrollStyle(value)
                   : null,
-              closeOnActivate: !usesEdgeThickness,
               ffi: widget.ffi,
             ),
             RdoMenuButton<String>(
@@ -1497,7 +1480,6 @@ class _DisplayMenuState extends State<_DisplayMenu> {
               onChanged: widget.ffi.canvasModel.imageOverflow.value
                   ? (value) => onChangeScrollStyle(value)
                   : null,
-              closeOnActivate: !usesEdgeThickness,
               ffi: widget.ffi,
             ),
             if (!isWeb) ...[
@@ -1505,7 +1487,6 @@ class _DisplayMenuState extends State<_DisplayMenu> {
                 child: Text(translate('ScrollEdge')),
                 value: kRemoteScrollStyleEdge,
                 groupValue: groupValue,
-                closeOnActivate: false,
                 onChanged: widget.ffi.canvasModel.imageOverflow.value
                     ? (value) => onChangeScrollStyle(value)
                     : null,
@@ -1515,19 +1496,11 @@ class _DisplayMenuState extends State<_DisplayMenu> {
                 child: Text(translate('ScrollEdgeAcceleration')),
                 value: kRemoteScrollStyleEdgeAcceleration,
                 groupValue: groupValue,
-                closeOnActivate: false,
                 onChanged: widget.ffi.canvasModel.imageOverflow.value
                     ? (value) => onChangeScrollStyle(value)
                     : null,
                 ffi: widget.ffi,
               ),
-              Offstage(
-                  offstage: !usesEdgeThickness,
-                  child: EdgeThicknessControl(
-                    value: edgeScrollEdgeThickness.toDouble(),
-                    onChanged: onChangeEdgeScrollEdgeThickness,
-                    colorScheme: colorScheme,
-                  )),
             ],
             Divider(),
           ]));

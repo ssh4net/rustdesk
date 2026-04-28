@@ -2812,6 +2812,8 @@ pub fn main_get_common(key: String) -> String {
             "pairing_required": info.pairing_required,
         })
         .to_string();
+    } else if key == "paired-viewers" {
+        return ui_interface::get_paired_viewers();
     } else {
         if key.starts_with("download-data-") {
             let id = key.replace("download-data-", "");
@@ -2860,6 +2862,14 @@ pub fn main_get_common_sync(key: String) -> SyncReturn<String> {
 }
 
 pub fn main_set_common(_key: String, _value: String) {
+    if _key == "remove-paired-viewers" {
+        ui_interface::remove_paired_viewers(&_value);
+        return;
+    }
+    if _key == "clear-paired-viewers" {
+        ui_interface::clear_paired_viewers();
+        return;
+    }
     #[cfg(target_os = "windows")]
     if _key == "install-printer" && crate::platform::is_win_10_or_greater() {
         std::thread::spawn(move || {
