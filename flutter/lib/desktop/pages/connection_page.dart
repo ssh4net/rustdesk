@@ -343,7 +343,7 @@ class _NetworkStatusPanelBodyState extends State<NetworkStatusPanelBody> {
             children: [
               if (widget.mode == 'local_only' || widget.pairingRequired)
                 buildStatusLine(
-                  'Pairing passphrase',
+                  'Local pairing passphrase',
                   widget.pairingRequired ? 'Required' : 'Disabled',
                 ),
               if (directAccessValue.isNotEmpty) ...[

@@ -1163,7 +1163,9 @@ class FfiModel with ChangeNotifier {
         }
 
         return CustomAlertDialog(
-          title: Text(translate('Pairing passphrase required')),
+          title: Text(translate(direct
+              ? 'Local pairing passphrase required'
+              : 'Rendezvous pairing passphrase required')),
           content: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
@@ -1171,7 +1173,7 @@ class FfiModel with ChangeNotifier {
               Text(
                 direct
                     ? 'Enter the local pairing passphrase to continue this direct connection.'
-                    : 'Enter the secure pairing passphrase to continue this connection.',
+                    : 'Enter the rendezvous pairing passphrase to continue this connection.',
               ).marginOnly(bottom: 12),
               buildLine(direct ? 'Endpoint' : 'Peer', peer),
               buildLine('Peer ID', peerId),
@@ -1183,7 +1185,9 @@ class FfiModel with ChangeNotifier {
                 maxLength: bind.mainMaxEncryptLen(),
                 onChanged: (_) => setState(() {}),
                 decoration: InputDecoration(
-                  labelText: 'Pairing passphrase',
+                  labelText: direct
+                      ? 'Local pairing passphrase'
+                      : 'Rendezvous pairing passphrase',
                   suffixIcon: IconButton(
                     onPressed: () => setState(() {
                       obscure = !obscure;

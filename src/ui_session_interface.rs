@@ -1859,7 +1859,11 @@ impl<T: InvokeUiSession> Interface for Session<T> {
             .to_string();
             self.ui_handler.msgbox(
                 "input-pairing-passphrase",
-                "Pairing passphrase required",
+                if direct {
+                    "Local pairing passphrase required"
+                } else {
+                    "Rendezvous pairing passphrase required"
+                },
                 &payload,
                 "",
                 false,

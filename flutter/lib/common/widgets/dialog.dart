@@ -417,9 +417,9 @@ Future<String> changeDirectAccessPairingPassphrase(String currentValue) async {
 Future<String> changePeerPairingPassphrase(String currentValue) async {
   return changePairingPassphrase(
     currentValue,
-    title: "Peer pairing passphrase",
+    title: "Rendezvous pairing passphrase",
     description:
-        "Require this passphrase for first secure peer connections before the device key is trusted.",
+        "Require this passphrase for first rendezvous-mediated connections before the device key is trusted.",
     optionKey: kOptionPeerPairingPassphrase,
   );
 }

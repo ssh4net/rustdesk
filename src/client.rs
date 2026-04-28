@@ -873,7 +873,7 @@ impl Client {
                     if !secure_id.pairing_required {
                         if !crate::common::allow_unverified_peer_trust() {
                             bail!(
-                                "Handshake failed: first secure contact requires a trusted peer key or peer pairing passphrase. Enable 'Allow unverified peer trust' to allow legacy first-contact trust"
+                                "Handshake failed: first secure contact requires a trusted peer key or rendezvous pairing passphrase. Enable 'Allow unverified peer trust' to allow legacy first-contact trust"
                             );
                         }
                         interface
@@ -5046,7 +5046,7 @@ mod security_tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains(
-            "first secure contact requires a trusted peer key or peer pairing passphrase"
+            "first secure contact requires a trusted peer key or rendezvous pairing passphrase"
         ));
         handle.abort();
 

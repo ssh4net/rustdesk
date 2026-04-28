@@ -36,6 +36,7 @@ const double _kContentHMargin = 15;
 const double _kContentHSubMargin = _kContentHMargin + 33;
 const double _kCheckBoxLeftMargin = 10;
 const double _kRadioLeftMargin = 10;
+const double _kSettingRowMinHeight = 48;
 const double _kListViewBottomMargin = 15;
 const double _kTitleFontSize = 20;
 const double _kContentFontSize = 15;
@@ -1348,7 +1349,7 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
     final isOptFixed = isOptionFixed(kOptionPeerPairingPassphrase);
     return _SubLabeledWidget(
       context,
-      'Peer pairing passphrase',
+      'Rendezvous pairing passphrase',
       Row(
         children: [
           Expanded(
@@ -1386,6 +1387,8 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
         ],
       ),
       enabled: enabled && !locked && !isOptFixed,
+      leftMargin: _kCheckBoxLeftMargin,
+      minHeight: _kSettingRowMinHeight,
     );
   }
 
@@ -1457,7 +1460,7 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                 ),
                 _SubLabeledWidget(
                   context,
-                  'Pairing passphrase',
+                  'Local pairing passphrase',
                   Row(
                     children: [
                       Expanded(
@@ -1501,6 +1504,8 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                     ],
                   ),
                   enabled: enabled && !locked && !isPairingOptFixed,
+                  leftMargin: _kCheckBoxLeftMargin,
+                  minHeight: _kSettingRowMinHeight,
                 ),
                 Row(
                   children: [
@@ -1529,7 +1534,7 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                       child: Text(translate('Manage paired viewers')),
                     )
                   ],
-                ).marginOnly(left: 30),
+                ),
               ],
             ),
           );
@@ -3268,19 +3273,24 @@ Widget _SubButton(String label, Function() onPressed, [bool enabled = true]) {
 
 // ignore: non_constant_identifier_names
 Widget _SubLabeledWidget(BuildContext context, String label, Widget child,
-    {bool enabled = true}) {
-  return Row(
-    children: [
-      Text(
-        '${translate(label)}: ',
-        style: TextStyle(color: disabledTextColor(context, enabled)),
-      ),
-      const SizedBox(
-        width: 10,
-      ),
-      Flexible(child: child),
-    ],
-  ).marginOnly(left: _kContentHSubMargin);
+    {bool enabled = true,
+    double leftMargin = _kContentHSubMargin,
+    double? minHeight}) {
+  return ConstrainedBox(
+    constraints: BoxConstraints(minHeight: minHeight ?? 0),
+    child: Row(
+      children: [
+        Text(
+          '${translate(label)}: ',
+          style: TextStyle(color: disabledTextColor(context, enabled)),
+        ),
+        const SizedBox(
+          width: 10,
+        ),
+        Flexible(child: child),
+      ],
+    ),
+  ).marginOnly(left: leftMargin);
 }
 
 Widget _lock(

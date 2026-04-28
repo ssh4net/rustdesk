@@ -455,7 +455,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                     Offstage(
                         offstage: !_enableDirectIPAccess,
                         child: Text(
-                          '${translate("Local Address")}: $_localIP${_directAccessPort.isEmpty ? "" : ":$_directAccessPort"}${_directAccessPairingPassphraseSet ? "\nPairing passphrase: Required" : ""}',
+                          '${translate("Local Address")}: $_localIP${_directAccessPort.isEmpty ? "" : ":$_directAccessPort"}${_directAccessPairingPassphraseSet ? "\nLocal pairing passphrase: Required" : ""}',
                           style: Theme.of(context).textTheme.bodySmall,
                         )),
                   ])),
@@ -534,7 +534,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
               }));
             }),
       SettingsTile(
-        title: Text(translate("Peer pairing passphrase")),
+        title: Text(translate("Rendezvous pairing passphrase")),
         value: Padding(
           padding: EdgeInsets.symmetric(vertical: 8),
           child: Text(
