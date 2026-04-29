@@ -1171,7 +1171,10 @@ const DIRECT_PUBLIC_KEY_FLAG_PAIRING_PROOF: u8 = 0x01;
 const DIRECT_PUBLIC_KEY_FLAG_INITIATOR_ID: u8 = 0x02;
 const DIRECT_PAIRING_PROOF_LEN: usize = 32;
 pub const DIRECT_PAIRING_SCOPE: &str = "direct";
+pub const RENDEZVOUS_PAIRING_SCOPE: &str = "rendezvous";
 const PEER_OPTION_DIRECT_PAIRED_VIEWER_CONFIRMED: &str = "direct-paired-viewer-confirmed";
+const PEER_OPTION_RENDEZVOUS_PAIRED_VIEWER_CONFIRMED: &str = "rendezvous-paired-viewer-confirmed";
+const PAIRED_VIEWER_CONFIRMATION_TTL_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectSignedId {
@@ -1189,6 +1192,7 @@ pub struct SecureSignedId {
     pub box_pk: [u8; 32],
     pub pairing_required: bool,
     pub pairing_salt: Option<[u8; argon2id13::SALTBYTES]>,
+    pub supports_paired_viewer_identity: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2397,34 +2401,76 @@ pub fn clear_pinned_peer_signing_key(peer_config_id: &str) -> bool {
     }
 }
 
-pub fn has_confirmed_direct_paired_viewer(peer_config_id: &str) -> bool {
-    let config = PeerConfig::load(peer_config_id);
-    config
-        .options
-        .get(PEER_OPTION_DIRECT_PAIRED_VIEWER_CONFIRMED)
-        .is_some_and(|value| value == "Y")
+fn paired_viewer_confirmed_option(scope: &str) -> Option<&'static str> {
+    match scope {
+        DIRECT_PAIRING_SCOPE => Some(PEER_OPTION_DIRECT_PAIRED_VIEWER_CONFIRMED),
+        RENDEZVOUS_PAIRING_SCOPE => Some(PEER_OPTION_RENDEZVOUS_PAIRED_VIEWER_CONFIRMED),
+        _ => None,
+    }
 }
 
-pub fn set_confirmed_direct_paired_viewer(peer_config_id: &str, confirmed: bool) {
+fn is_paired_viewer_confirmation_current(value: &str) -> bool {
+    if value == "Y" {
+        return true;
+    }
+    let Ok(confirmed_at) = value.parse::<i64>() else {
+        return false;
+    };
+    let now = hbb_common::get_time();
+    confirmed_at > 0
+        && (confirmed_at >= now
+            || now.saturating_sub(confirmed_at) <= PAIRED_VIEWER_CONFIRMATION_TTL_MS)
+}
+
+pub fn has_confirmed_paired_viewer(scope: &str, peer_config_id: &str) -> bool {
+    let Some(option) = paired_viewer_confirmed_option(scope) else {
+        return false;
+    };
+    let config = PeerConfig::load(peer_config_id);
+    let Some(value) = config.options.get(option) else {
+        return false;
+    };
+    if value == "Y" {
+        set_confirmed_paired_viewer(scope, peer_config_id, true);
+        return true;
+    }
+    is_paired_viewer_confirmation_current(value)
+}
+
+pub fn set_confirmed_paired_viewer(scope: &str, peer_config_id: &str, confirmed: bool) {
+    let Some(option) = paired_viewer_confirmed_option(scope) else {
+        return;
+    };
     let mut config = PeerConfig::load(peer_config_id);
     let changed = if confirmed {
+        let value = hbb_common::get_time().to_string();
         config
             .options
-            .insert(
-                PEER_OPTION_DIRECT_PAIRED_VIEWER_CONFIRMED.to_owned(),
-                "Y".to_owned(),
-            )
+            .insert(option.to_owned(), value.clone())
             .as_deref()
-            != Some("Y")
+            != Some(value.as_str())
     } else {
-        config
-            .options
-            .remove(PEER_OPTION_DIRECT_PAIRED_VIEWER_CONFIRMED)
-            .is_some()
+        config.options.remove(option).is_some()
     };
     if changed {
         config.store(peer_config_id);
     }
+}
+
+pub fn has_confirmed_direct_paired_viewer(peer_config_id: &str) -> bool {
+    has_confirmed_paired_viewer(DIRECT_PAIRING_SCOPE, peer_config_id)
+}
+
+pub fn set_confirmed_direct_paired_viewer(peer_config_id: &str, confirmed: bool) {
+    set_confirmed_paired_viewer(DIRECT_PAIRING_SCOPE, peer_config_id, confirmed);
+}
+
+pub fn has_confirmed_rendezvous_paired_viewer(peer_config_id: &str) -> bool {
+    has_confirmed_paired_viewer(RENDEZVOUS_PAIRING_SCOPE, peer_config_id)
+}
+
+pub fn set_confirmed_rendezvous_paired_viewer(peer_config_id: &str, confirmed: bool) {
+    set_confirmed_paired_viewer(RENDEZVOUS_PAIRING_SCOPE, peer_config_id, confirmed);
 }
 
 pub fn ensure_pinned_peer_signing_key(peer_config_id: &str, pk: &[u8]) -> ResultType<()> {
@@ -2630,7 +2676,9 @@ pub fn create_secure_signed_id_with_pairing(
     let mut signed_payload =
         Vec::with_capacity(SECURE_SIGNED_ID_V2_MAGIC.len() + 2 + pairing_salt.len() + id_pk.len());
     signed_payload.extend_from_slice(SECURE_SIGNED_ID_V2_MAGIC);
-    signed_payload.push(DIRECT_HANDSHAKE_FLAG_PAIRING_REQUIRED);
+    signed_payload.push(
+        DIRECT_HANDSHAKE_FLAG_PAIRING_REQUIRED | DIRECT_HANDSHAKE_FLAG_PAIRED_VIEWER_IDENTITY,
+    );
     signed_payload.push(pairing_salt.len() as u8);
     signed_payload.extend_from_slice(&pairing_salt);
     signed_payload.extend_from_slice(&id_pk);
@@ -2650,6 +2698,8 @@ pub fn decode_secure_signed_id(signed: &[u8], key: &sign::PublicKey) -> ResultTy
             bail!("Handshake failed: truncated secure handshake metadata");
         }
         let pairing_required = flags & DIRECT_HANDSHAKE_FLAG_PAIRING_REQUIRED != 0;
+        let supports_paired_viewer_identity =
+            flags & DIRECT_HANDSHAKE_FLAG_PAIRED_VIEWER_IDENTITY != 0;
         let pairing_salt = if pairing_required {
             if salt_len != argon2id13::SALTBYTES {
                 bail!("Handshake failed: invalid secure pairing salt length");
@@ -2669,6 +2719,7 @@ pub fn decode_secure_signed_id(signed: &[u8], key: &sign::PublicKey) -> ResultTy
             box_pk: pk,
             pairing_required,
             pairing_salt,
+            supports_paired_viewer_identity,
         });
     }
     let res = IdPk::parse_from_bytes(&verified)?;
@@ -2680,6 +2731,7 @@ pub fn decode_secure_signed_id(signed: &[u8], key: &sign::PublicKey) -> ResultTy
         box_pk: pk,
         pairing_required: false,
         pairing_salt: None,
+        supports_paired_viewer_identity: false,
     })
 }
 
@@ -4427,6 +4479,43 @@ mod tests {
         assert_eq!(decoded.box_pk, box_pk.0);
         assert!(decoded.pairing_required);
         assert_eq!(decoded.pairing_salt, Some(salt));
+        assert!(decoded.supports_paired_viewer_identity);
+    }
+
+    #[test]
+    fn test_confirmed_paired_viewer_state_expires_by_scope() {
+        let _guard = TEST_CONFIG_LOCK.lock().unwrap();
+        let peer_config_id = format!("paired-viewer-{}", Uuid::new_v4());
+        let expired_at = hbb_common::get_time() - PAIRED_VIEWER_CONFIRMATION_TTL_MS - 1;
+
+        let mut config = PeerConfig::load(&peer_config_id);
+        config.options.insert(
+            PEER_OPTION_RENDEZVOUS_PAIRED_VIEWER_CONFIRMED.to_owned(),
+            expired_at.to_string(),
+        );
+        config.store(&peer_config_id);
+        assert!(!has_confirmed_rendezvous_paired_viewer(&peer_config_id));
+
+        let mut config = PeerConfig::load(&peer_config_id);
+        config.options.insert(
+            PEER_OPTION_DIRECT_PAIRED_VIEWER_CONFIRMED.to_owned(),
+            "Y".to_owned(),
+        );
+        config.store(&peer_config_id);
+        assert!(has_confirmed_direct_paired_viewer(&peer_config_id));
+        let migrated = PeerConfig::load(&peer_config_id)
+            .options
+            .get(PEER_OPTION_DIRECT_PAIRED_VIEWER_CONFIRMED)
+            .cloned()
+            .unwrap_or_default();
+        assert_ne!(migrated, "Y");
+
+        set_confirmed_rendezvous_paired_viewer(&peer_config_id, true);
+        assert!(has_confirmed_rendezvous_paired_viewer(&peer_config_id));
+        set_confirmed_rendezvous_paired_viewer(&peer_config_id, false);
+        assert!(!has_confirmed_rendezvous_paired_viewer(&peer_config_id));
+
+        PeerConfig::remove(&peer_config_id);
     }
 
     #[test]

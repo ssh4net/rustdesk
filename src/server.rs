@@ -325,6 +325,13 @@ async fn create_tcp_connection_with_mode(
                             their_pk_b.copy_from_slice(&public_key.asymmetric_value);
                             stream.set_key(key);
                             let mut ack = Message::new();
+                            let pairing_scope = match handshake_mode {
+                                HandshakeMode::Direct => Some(crate::common::DIRECT_PAIRING_SCOPE),
+                                HandshakeMode::Rendezvous => {
+                                    Some(crate::common::RENDEZVOUS_PAIRING_SCOPE)
+                                }
+                                HandshakeMode::Disabled => None,
+                            };
                             let mut paired_initiator = None;
                             let mut error_text = None;
                             if let Some(pairing_proof) = public_key_payload.pairing_proof {
@@ -337,9 +344,7 @@ async fn create_tcp_connection_with_mode(
                                     &their_pk_b,
                                 )?;
                                 if pairing_proof == expected_proof {
-                                    if handshake_mode == HandshakeMode::Direct
-                                        && remember_paired_viewers
-                                    {
+                                    if remember_paired_viewers {
                                         if let Some(initiator) =
                                             public_key_payload.initiator.as_ref()
                                         {
@@ -347,7 +352,9 @@ async fn create_tcp_connection_with_mode(
                                                 initiator,
                                                 &public_key.asymmetric_value,
                                             )?;
-                                            paired_initiator = Some(initiator.clone());
+                                            if let Some(scope) = pairing_scope {
+                                                paired_initiator = Some((scope, initiator.clone()));
+                                            }
                                         }
                                     }
                                 } else {
@@ -355,18 +362,20 @@ async fn create_tcp_connection_with_mode(
                                         "Handshake failed: pairing passphrase rejected".to_owned(),
                                     );
                                 }
-                            } else if handshake_mode == HandshakeMode::Direct {
+                            } else {
                                 let trusted = if remember_paired_viewers {
                                     if let Some(initiator) = public_key_payload.initiator.as_ref() {
                                         crate::common::validate_direct_public_key_initiator(
                                             initiator,
                                             &public_key.asymmetric_value,
                                         )?;
-                                        Config::has_paired_viewer(
-                                            crate::common::DIRECT_PAIRING_SCOPE,
-                                            &initiator.id,
-                                            &initiator.sign_pk,
-                                        )
+                                        pairing_scope.is_some_and(|scope| {
+                                            Config::has_paired_viewer(
+                                                scope,
+                                                &initiator.id,
+                                                &initiator.sign_pk,
+                                            )
+                                        })
                                     } else {
                                         false
                                     }
@@ -378,9 +387,6 @@ async fn create_tcp_connection_with_mode(
                                         "Handshake failed: pairing passphrase required".to_owned(),
                                     );
                                 }
-                            } else {
-                                error_text =
-                                    Some("Handshake failed: missing pairing proof".to_owned());
                             }
                             if let Some(error_text) = error_text {
                                 ack.set_message_box(MessageBox {
@@ -392,14 +398,14 @@ async fn create_tcp_connection_with_mode(
                                 timeout(CONNECT_TIMEOUT, stream.send(&ack)).await??;
                                 bail!("{}", error_text);
                             }
-                            if let Some(initiator) = paired_initiator {
+                            if let Some((scope, initiator)) = paired_initiator {
                                 Config::add_paired_viewer(PairedViewer {
                                     sign_pk: Bytes::from(initiator.sign_pk.to_vec()),
                                     time: get_time(),
                                     id: initiator.id,
                                     name: String::new(),
                                     platform: String::new(),
-                                    scope: crate::common::DIRECT_PAIRING_SCOPE.to_owned(),
+                                    scope: scope.to_owned(),
                                 });
                             }
                             ack.set_signed_id(SignedId {

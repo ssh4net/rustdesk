@@ -36,7 +36,7 @@ use crate::{
     secure_tcp,
     ui_interface::{get_builtin_option, resolve_avatar_url, use_texture_render},
     ui_session_interface::{InvokeUiSession, Session},
-    wrap_direct_public_key_symmetric_value, wrap_direct_public_key_symmetric_value_with_identity,
+    wrap_direct_public_key_symmetric_value_with_identity,
 };
 #[cfg(feature = "unix-file-copy-paste")]
 use crate::{clipboard::check_clipboard_files, clipboard_file::unix_file_clip};
@@ -210,7 +210,12 @@ impl Client {
         debug_assert!(peer == interface.get_id());
         interface.update_direct(None);
         interface.update_received(false);
-        match Self::_start(peer, key, token, conn_type, interface.clone()).await {
+        let peer_config_id = interface.get_id();
+        match Self::retry_after_cleared_rendezvous_pairing(&peer_config_id, || {
+            Self::_start(peer, key, token, conn_type, interface.clone())
+        })
+        .await
+        {
             Err(err) => {
                 let err_str = err.to_string();
                 if err_str.starts_with("Failed") {
@@ -231,6 +236,32 @@ impl Client {
                     }
                 }
                 Ok((x.0, x.1))
+            }
+        }
+    }
+
+    async fn retry_after_cleared_rendezvous_pairing<T, Op, Fut>(
+        peer_config_id: &str,
+        mut op: Op,
+    ) -> ResultType<T>
+    where
+        Op: FnMut() -> Fut,
+        Fut: std::future::Future<Output = ResultType<T>>,
+    {
+        let had_confirmed_pairing =
+            crate::common::has_confirmed_rendezvous_paired_viewer(peer_config_id);
+        match op().await {
+            Ok(result) => Ok(result),
+            Err(err) => {
+                let pairing_was_cleared = had_confirmed_pairing
+                    && !crate::common::has_confirmed_rendezvous_paired_viewer(peer_config_id);
+                if !pairing_was_cleared {
+                    return Err(err);
+                }
+                log::info!(
+                    "Remembered rendezvous pairing for {peer_config_id} was refused; restarting connection with pairing passphrase"
+                );
+                op().await
             }
         }
     }
@@ -258,12 +289,12 @@ impl Client {
         }
         // to-do: remember the port for each peer, so that we can retry easier
         if hbb_common::is_ip_str(peer) {
-            let mut conn =
-                connect_tcp_local(check_port(peer, RELAY_PORT + 1), None, CONNECT_TIMEOUT).await?;
-            let pk = Self::secure_direct_connection(
+            let peer_config_id = interface.get_id();
+            let connect_addr = check_port(peer, RELAY_PORT + 1);
+            let (conn, pk) = Self::connect_secure_direct_with_pairing_retry(
                 peer,
-                &interface.get_id(),
-                &mut conn,
+                &peer_config_id,
+                &connect_addr,
                 interface.clone(),
             )
             .await?;
@@ -275,11 +306,11 @@ impl Client {
         }
         // Allow connect to {domain}:{port}
         if hbb_common::is_domain_port_str(peer) {
-            let mut conn = connect_tcp_local(peer, None, CONNECT_TIMEOUT).await?;
-            let pk = Self::secure_direct_connection(
+            let peer_config_id = interface.get_id();
+            let (conn, pk) = Self::connect_secure_direct_with_pairing_retry(
                 peer,
-                &interface.get_id(),
-                &mut conn,
+                &peer_config_id,
+                peer,
                 interface.clone(),
             )
             .await?;
@@ -885,30 +916,55 @@ impl Client {
                 }
                 let (asymmetric_value, symmetric_value, key) =
                     create_symmetric_key_msg(secure_id.box_pk);
+                let remember_paired_viewers =
+                    Config::get_bool_option(keys::OPTION_REMEMBER_PAIRED_VIEWERS);
+                let use_paired_viewer = secure_id.pairing_required
+                    && secure_id.supports_paired_viewer_identity
+                    && remember_paired_viewers
+                    && pending_trust.is_none()
+                    && crate::common::has_confirmed_rendezvous_paired_viewer(peer_config_id);
+                let initiator_signed_id = if secure_id.pairing_required
+                    && secure_id.supports_paired_viewer_identity
+                    && remember_paired_viewers
+                {
+                    Some(crate::common::create_direct_public_key_initiator_id(
+                        &Config::get_id(),
+                        &asymmetric_value,
+                    )?)
+                } else {
+                    None
+                };
+                let mut pairing_was_proven = false;
                 let pairing_proof = if let Some(pairing_salt) = secure_id.pairing_salt {
                     let mut our_pk_b = [0u8; box_::PUBLICKEYBYTES];
                     our_pk_b.copy_from_slice(&asymmetric_value);
-                    let passphrase = interface
-                        .request_pairing_passphrase(peer, peer_id, false)
-                        .await?;
-                    Some(crate::common::compute_direct_pairing_proof(
-                        &passphrase,
-                        &pairing_salt,
-                        peer_id,
-                        &pk,
-                        &secure_id.box_pk,
-                        &our_pk_b,
-                    )?)
+                    if use_paired_viewer {
+                        None
+                    } else {
+                        let passphrase = interface
+                            .request_pairing_passphrase(peer, peer_id, false)
+                            .await?;
+                        pairing_was_proven = true;
+                        Some(crate::common::compute_direct_pairing_proof(
+                            &passphrase,
+                            &pairing_salt,
+                            peer_id,
+                            &pk,
+                            &secure_id.box_pk,
+                            &our_pk_b,
+                        )?)
+                    }
                 } else {
                     None
                 };
                 let mut msg_out = Message::new();
                 msg_out.set_public_key(PublicKey {
                     asymmetric_value,
-                    symmetric_value: wrap_direct_public_key_symmetric_value(
+                    symmetric_value: wrap_direct_public_key_symmetric_value_with_identity(
                         &symmetric_value,
                         pairing_proof,
-                    ),
+                        initiator_signed_id.as_ref().map(|value| value.as_ref()),
+                    )?,
                     ..Default::default()
                 });
                 timeout(CONNECT_TIMEOUT, conn.send(&msg_out)).await??;
@@ -926,17 +982,36 @@ impl Client {
                                 Some(message::Union::MessageBox(msgbox))
                                     if msgbox.msgtype == "error" =>
                                 {
+                                    Self::clear_refused_rendezvous_paired_viewer(
+                                        peer_config_id,
+                                        use_paired_viewer,
+                                    );
                                     bail!("{}", msgbox.text);
                                 }
-                                _ => bail!("Handshake failed: invalid pairing acknowledgement"),
+                                _ => {
+                                    Self::clear_refused_rendezvous_paired_viewer(
+                                        peer_config_id,
+                                        use_paired_viewer,
+                                    );
+                                    bail!("Handshake failed: invalid pairing acknowledgement");
+                                }
                             }
                         }
-                        None => bail!("Handshake failed: pairing acknowledgement missing"),
+                        None => {
+                            Self::clear_refused_rendezvous_paired_viewer(
+                                peer_config_id,
+                                use_paired_viewer,
+                            );
+                            bail!("Handshake failed: pairing acknowledgement missing");
+                        }
                     }
                 }
                 if let Some((fingerprint, trust_phrase)) = pending_trust.take() {
                     let _ = (fingerprint, trust_phrase);
                     crate::common::pin_trusted_peer_signing_key(peer_id, peer_config_id, &pk)?;
+                }
+                if pairing_was_proven && initiator_signed_id.is_some() {
+                    crate::common::set_confirmed_rendezvous_paired_viewer(peer_config_id, true);
                 }
             }
             None => {
@@ -1066,20 +1141,26 @@ impl Client {
                                 Some(message::Union::MessageBox(msgbox))
                                     if msgbox.msgtype == "error" =>
                                 {
-                                    if use_paired_viewer {
-                                        crate::common::set_confirmed_direct_paired_viewer(
-                                            peer_config_id,
-                                            false,
-                                        );
-                                    }
+                                    Self::clear_refused_direct_paired_viewer(
+                                        peer_config_id,
+                                        use_paired_viewer,
+                                    );
                                     bail!("{}", msgbox.text);
                                 }
                                 _ => {
+                                    Self::clear_refused_direct_paired_viewer(
+                                        peer_config_id,
+                                        use_paired_viewer,
+                                    );
                                     bail!("Handshake failed: invalid direct handshake acknowledgement");
                                 }
                             }
                         }
                         None => {
+                            Self::clear_refused_direct_paired_viewer(
+                                peer_config_id,
+                                use_paired_viewer,
+                            );
                             bail!("Handshake failed: missing direct handshake acknowledgement");
                         }
                     }
@@ -1100,6 +1181,54 @@ impl Client {
             }
             None => {
                 bail!("Reset by the peer");
+            }
+        }
+    }
+
+    fn clear_refused_direct_paired_viewer(peer_config_id: &str, used_paired_viewer: bool) {
+        if used_paired_viewer {
+            log::info!(
+                "Clearing remembered direct pairing for {peer_config_id}; host requested pairing again"
+            );
+            crate::common::set_confirmed_direct_paired_viewer(peer_config_id, false);
+        }
+    }
+
+    fn clear_refused_rendezvous_paired_viewer(peer_config_id: &str, used_paired_viewer: bool) {
+        if used_paired_viewer {
+            log::info!(
+                "Clearing remembered rendezvous pairing for {peer_config_id}; host requested pairing again"
+            );
+            crate::common::set_confirmed_rendezvous_paired_viewer(peer_config_id, false);
+        }
+    }
+
+    async fn connect_secure_direct_with_pairing_retry(
+        peer: &str,
+        peer_config_id: &str,
+        connect_addr: &str,
+        interface: impl Interface,
+    ) -> ResultType<(Stream, Vec<u8>)> {
+        let had_confirmed_pairing =
+            crate::common::has_confirmed_direct_paired_viewer(peer_config_id);
+        let mut conn = connect_tcp_local(connect_addr, None, CONNECT_TIMEOUT).await?;
+        match Self::secure_direct_connection(peer, peer_config_id, &mut conn, interface.clone())
+            .await
+        {
+            Ok(pk) => Ok((conn, pk)),
+            Err(err) => {
+                let pairing_was_cleared = had_confirmed_pairing
+                    && !crate::common::has_confirmed_direct_paired_viewer(peer_config_id);
+                if !pairing_was_cleared {
+                    return Err(err);
+                }
+                log::info!(
+                    "Remembered direct pairing for {peer_config_id} was refused; retrying with local pairing passphrase"
+                );
+                let mut conn = connect_tcp_local(connect_addr, None, CONNECT_TIMEOUT).await?;
+                let pk = Self::secure_direct_connection(peer, peer_config_id, &mut conn, interface)
+                    .await?;
+                Ok((conn, pk))
             }
         }
     }
@@ -4648,6 +4777,87 @@ mod security_tests {
         Ok((addr.to_string(), handle))
     }
 
+    async fn spawn_direct_handshake_peer_refuse_paired_then_accept_pairing(
+        peer_id: String,
+        sign_pk: [u8; sign::PUBLICKEYBYTES],
+        sign_sk: sign::SecretKey,
+        pairing_passphrase: String,
+    ) -> ResultType<(String, tokio::task::JoinHandle<ResultType<()>>)> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let handle = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (socket, _) = listener.accept().await?;
+                socket.set_nodelay(true).ok();
+                let local_addr = socket.local_addr()?;
+                let mut stream = Stream::from(socket, local_addr);
+                let (box_pk, box_sk) = box_::gen_keypair();
+                let pairing_salt = crate::common::create_direct_pairing_salt();
+                let signed_id = crate::common::create_direct_signed_id_with_pairing(
+                    &peer_id,
+                    box_pk.0,
+                    &sign_pk,
+                    &sign_sk,
+                    pairing_salt,
+                );
+                let mut msg_out = Message::new();
+                msg_out.set_signed_id(SignedId {
+                    id: signed_id,
+                    ..Default::default()
+                });
+                stream.send(&msg_out).await?;
+
+                let bytes = stream
+                    .next()
+                    .await
+                    .ok_or_else(|| anyhow!("Handshake failed: missing client response"))??;
+                let msg_in = Message::parse_from_bytes(&bytes)?;
+                let Some(message::Union::PublicKey(public_key)) = msg_in.union else {
+                    bail!("Handshake failed: invalid client response type");
+                };
+                let public_key_payload = crate::common::unwrap_direct_public_key_payload(
+                    &public_key.symmetric_value,
+                    true,
+                )?;
+                let key = tcp::Encrypt::decode(
+                    &public_key_payload.symmetric_value,
+                    &public_key.asymmetric_value,
+                    &box_sk,
+                )?;
+                stream.set_key(key);
+                let Some(pairing_proof) = public_key_payload.pairing_proof else {
+                    // Simulate host-side paired-viewer removal/refusal where the
+                    // remembered-pairing attempt closes before the client reads an ack.
+                    continue;
+                };
+
+                let mut initiator_box_pk = [0u8; box_::PUBLICKEYBYTES];
+                initiator_box_pk.copy_from_slice(&public_key.asymmetric_value);
+                let expected_proof = crate::common::compute_direct_pairing_proof(
+                    &pairing_passphrase,
+                    &pairing_salt,
+                    &peer_id,
+                    &sign_pk,
+                    &box_pk.0,
+                    &initiator_box_pk,
+                )?;
+                if pairing_proof != expected_proof {
+                    bail!("Handshake failed: pairing passphrase rejected");
+                }
+
+                let mut ack = Message::new();
+                ack.set_signed_id(SignedId {
+                    id: crate::common::direct_handshake_ack_ok(),
+                    ..Default::default()
+                });
+                stream.send(&ack).await?;
+                return Ok(());
+            }
+            bail!("Handshake failed: retry with pairing proof was not received")
+        });
+        Ok((addr.to_string(), handle))
+    }
+
     async fn spawn_secure_handshake_peer(
         peer_id: String,
         sign_pk: [u8; sign::PUBLICKEYBYTES],
@@ -4699,40 +4909,81 @@ mod security_tests {
             let Some(message::Union::PublicKey(public_key)) = msg_in.union else {
                 bail!("Handshake failed: invalid client response type");
             };
-            let (pairing_proof, symmetric_value) =
-                crate::common::unwrap_direct_public_key_symmetric_value(
-                    &public_key.symmetric_value,
-                    pairing_salt.is_some(),
-                )?;
-            let key =
-                tcp::Encrypt::decode(&symmetric_value, &public_key.asymmetric_value, &box_sk)?;
+            let public_key_payload = crate::common::unwrap_direct_public_key_payload(
+                &public_key.symmetric_value,
+                pairing_salt.is_some(),
+            )?;
+            let key = tcp::Encrypt::decode(
+                &public_key_payload.symmetric_value,
+                &public_key.asymmetric_value,
+                &box_sk,
+            )?;
             if let (Some(pairing_passphrase), Some(pairing_salt)) =
                 (pairing_passphrase.as_ref(), pairing_salt)
             {
-                let Some(pairing_proof) = pairing_proof else {
-                    bail!("Handshake failed: missing pairing proof");
-                };
                 let mut initiator_box_pk = [0u8; box_::PUBLICKEYBYTES];
                 initiator_box_pk.copy_from_slice(&public_key.asymmetric_value);
-                let expected_proof = crate::common::compute_direct_pairing_proof(
-                    pairing_passphrase,
-                    &pairing_salt,
-                    &peer_id,
-                    &sign_pk,
-                    &box_pk.0,
-                    &initiator_box_pk,
-                )?;
                 stream.set_key(key);
                 let mut ack = Message::new();
-                if pairing_proof != expected_proof {
+                let mut paired_initiator = None;
+                let mut error_text = None;
+                if let Some(pairing_proof) = public_key_payload.pairing_proof {
+                    let expected_proof = crate::common::compute_direct_pairing_proof(
+                        pairing_passphrase,
+                        &pairing_salt,
+                        &peer_id,
+                        &sign_pk,
+                        &box_pk.0,
+                        &initiator_box_pk,
+                    )?;
+                    if pairing_proof == expected_proof {
+                        if let Some(initiator) = public_key_payload.initiator.as_ref() {
+                            crate::common::validate_direct_public_key_initiator(
+                                initiator,
+                                &public_key.asymmetric_value,
+                            )?;
+                            paired_initiator = Some(initiator.clone());
+                        }
+                    } else {
+                        error_text = Some("Handshake failed: pairing passphrase rejected");
+                    }
+                } else {
+                    let trusted = if let Some(initiator) = public_key_payload.initiator.as_ref() {
+                        crate::common::validate_direct_public_key_initiator(
+                            initiator,
+                            &public_key.asymmetric_value,
+                        )?;
+                        Config::has_paired_viewer(
+                            crate::common::RENDEZVOUS_PAIRING_SCOPE,
+                            &initiator.id,
+                            &initiator.sign_pk,
+                        )
+                    } else {
+                        false
+                    };
+                    if !trusted {
+                        error_text = Some("Handshake failed: pairing passphrase required");
+                    }
+                }
+                if let Some(error_text) = error_text {
                     ack.set_message_box(MessageBox {
                         msgtype: "error".to_owned(),
                         title: "Connection Error".to_owned(),
-                        text: "Handshake failed: pairing passphrase rejected".to_owned(),
+                        text: error_text.to_owned(),
                         ..Default::default()
                     });
                     stream.send(&ack).await?;
-                    bail!("Handshake failed: pairing passphrase rejected");
+                    bail!("{}", error_text);
+                }
+                if let Some(initiator) = paired_initiator {
+                    Config::add_paired_viewer(PairedViewer {
+                        sign_pk: Bytes::from(initiator.sign_pk.to_vec()),
+                        time: get_time(),
+                        id: initiator.id,
+                        name: String::new(),
+                        platform: String::new(),
+                        scope: crate::common::RENDEZVOUS_PAIRING_SCOPE.to_owned(),
+                    });
                 }
                 ack.set_signed_id(SignedId {
                     id: crate::common::direct_handshake_ack_ok(),
@@ -5013,6 +5264,65 @@ mod security_tests {
     }
 
     #[tokio::test]
+    async fn test_secure_direct_connection_retries_after_removed_paired_viewer() {
+        let _guard = TEST_CLIENT_SECURITY_LOCK.lock().unwrap();
+        let saved_allow = Config::get_option(keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST);
+        let saved_remember = Config::get_option(keys::OPTION_REMEMBER_PAIRED_VIEWERS);
+        let peer_id = format!("direct-peer-{}", Uuid::new_v4());
+        let peer_config_id = format!("direct-config-{}", Uuid::new_v4());
+        let (trusted_sign_pk, trusted_sign_sk) = sign::gen_keypair();
+
+        Config::clear_paired_viewers();
+        Config::set_option(
+            keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST.to_owned(),
+            "N".to_owned(),
+        );
+        Config::set_option(
+            keys::OPTION_REMEMBER_PAIRED_VIEWERS.to_owned(),
+            "Y".to_owned(),
+        );
+        crate::common::pin_trusted_peer_signing_key(&peer_id, &peer_config_id, &trusted_sign_pk.0)
+            .unwrap();
+        crate::common::set_confirmed_direct_paired_viewer(&peer_config_id, true);
+
+        let interface = TestInterface::new(&peer_config_id, Some("local-secret"));
+        let (addr, handle) = spawn_direct_handshake_peer_refuse_paired_then_accept_pairing(
+            peer_id.clone(),
+            trusted_sign_pk.0,
+            trusted_sign_sk,
+            "local-secret".to_owned(),
+        )
+        .await
+        .unwrap();
+
+        let (_conn, pk) = Client::connect_secure_direct_with_pairing_retry(
+            &addr,
+            &peer_config_id,
+            &addr,
+            interface.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(pk, trusted_sign_pk.0.to_vec());
+        assert_eq!(interface.pairing_requests.lock().unwrap().len(), 1);
+        assert!(crate::common::has_confirmed_direct_paired_viewer(
+            &peer_config_id
+        ));
+        handle.await.unwrap().unwrap();
+
+        PeerConfig::remove(&peer_config_id);
+        Config::clear_paired_viewers();
+        Config::set_option(
+            keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST.to_owned(),
+            saved_allow,
+        );
+        Config::set_option(
+            keys::OPTION_REMEMBER_PAIRED_VIEWERS.to_owned(),
+            saved_remember,
+        );
+    }
+
+    #[tokio::test]
     async fn test_secure_connection_requires_pairing_or_pretrust() {
         let _guard = TEST_CLIENT_SECURITY_LOCK.lock().unwrap();
         let saved_allow = Config::get_option(keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST);
@@ -5061,15 +5371,21 @@ mod security_tests {
     async fn test_secure_connection_with_pairing_pins_and_rejects_changed_key() {
         let _guard = TEST_CLIENT_SECURITY_LOCK.lock().unwrap();
         let saved_allow = Config::get_option(keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST);
+        let saved_remember = Config::get_option(keys::OPTION_REMEMBER_PAIRED_VIEWERS);
         let peer_id = format!("secure-peer-{}", Uuid::new_v4());
         let peer_config_id = format!("secure-config-{}", Uuid::new_v4());
         let interface = TestInterface::new(&peer_config_id, Some("server-secret"));
         let (trusted_sign_pk, trusted_sign_sk) = sign::gen_keypair();
         let (rs_pk, rs_sk) = sign::gen_keypair();
 
+        Config::clear_paired_viewers();
         Config::set_option(
             keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST.to_owned(),
             "N".to_owned(),
+        );
+        Config::set_option(
+            keys::OPTION_REMEMBER_PAIRED_VIEWERS.to_owned(),
+            "Y".to_owned(),
         );
         let (addr, signed_id_pk, handle) = spawn_secure_handshake_peer(
             peer_id.clone(),
@@ -5131,10 +5447,237 @@ mod security_tests {
         changed_handle.abort();
 
         PeerConfig::remove(&peer_config_id);
+        Config::clear_paired_viewers();
         Config::set_option(
             keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST.to_owned(),
             saved_allow,
         );
+        Config::set_option(
+            keys::OPTION_REMEMBER_PAIRED_VIEWERS.to_owned(),
+            saved_remember,
+        );
+    }
+
+    #[tokio::test]
+    async fn test_secure_connection_reuses_paired_viewer() {
+        let _guard = TEST_CLIENT_SECURITY_LOCK.lock().unwrap();
+        let saved_allow = Config::get_option(keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST);
+        let saved_remember = Config::get_option(keys::OPTION_REMEMBER_PAIRED_VIEWERS);
+        let peer_id = format!("secure-peer-{}", Uuid::new_v4());
+        let peer_config_id = format!("secure-config-{}", Uuid::new_v4());
+        let (trusted_sign_pk, trusted_sign_sk) = sign::gen_keypair();
+        let (rs_pk, rs_sk) = sign::gen_keypair();
+
+        Config::clear_paired_viewers();
+        Config::set_option(
+            keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST.to_owned(),
+            "N".to_owned(),
+        );
+        Config::set_option(
+            keys::OPTION_REMEMBER_PAIRED_VIEWERS.to_owned(),
+            "Y".to_owned(),
+        );
+
+        let first_interface = TestInterface::new(&peer_config_id, Some("server-secret"));
+        let (addr, signed_id_pk, handle) = spawn_secure_handshake_peer(
+            peer_id.clone(),
+            trusted_sign_pk.0,
+            trusted_sign_sk.clone(),
+            rs_sk.clone(),
+            Some("server-secret".to_owned()),
+        )
+        .await
+        .unwrap();
+        let mut conn = connect_tcp_local(addr.clone(), None, CONNECT_TIMEOUT)
+            .await
+            .unwrap();
+        Client::secure_connection(
+            &peer_id,
+            &peer_id,
+            &peer_config_id,
+            signed_id_pk,
+            &crate::common::encode64(rs_pk.0),
+            &first_interface,
+            &mut conn,
+        )
+        .await
+        .unwrap();
+        handle.await.unwrap().unwrap();
+        assert_eq!(first_interface.pairing_requests.lock().unwrap().len(), 1);
+        assert!(crate::common::has_confirmed_rendezvous_paired_viewer(
+            &peer_config_id
+        ));
+
+        let second_interface = TestInterface::new(&peer_config_id, None);
+        let (addr, signed_id_pk, handle) = spawn_secure_handshake_peer(
+            peer_id.clone(),
+            trusted_sign_pk.0,
+            trusted_sign_sk,
+            rs_sk,
+            Some("server-secret".to_owned()),
+        )
+        .await
+        .unwrap();
+        let mut conn = connect_tcp_local(addr.clone(), None, CONNECT_TIMEOUT)
+            .await
+            .unwrap();
+        let pk = Client::secure_connection(
+            &peer_id,
+            &peer_id,
+            &peer_config_id,
+            signed_id_pk,
+            &crate::common::encode64(rs_pk.0),
+            &second_interface,
+            &mut conn,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(pk, trusted_sign_pk.0.to_vec());
+        assert!(second_interface.pairing_requests.lock().unwrap().is_empty());
+        handle.await.unwrap().unwrap();
+
+        PeerConfig::remove(&peer_config_id);
+        Config::clear_paired_viewers();
+        Config::set_option(
+            keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST.to_owned(),
+            saved_allow,
+        );
+        Config::set_option(
+            keys::OPTION_REMEMBER_PAIRED_VIEWERS.to_owned(),
+            saved_remember,
+        );
+    }
+
+    #[tokio::test]
+    async fn test_secure_connection_clears_deleted_paired_viewer_and_requires_passphrase() {
+        let _guard = TEST_CLIENT_SECURITY_LOCK.lock().unwrap();
+        let saved_allow = Config::get_option(keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST);
+        let saved_remember = Config::get_option(keys::OPTION_REMEMBER_PAIRED_VIEWERS);
+        let peer_id = format!("secure-peer-{}", Uuid::new_v4());
+        let peer_config_id = format!("secure-config-{}", Uuid::new_v4());
+        let (trusted_sign_pk, trusted_sign_sk) = sign::gen_keypair();
+        let (rs_pk, rs_sk) = sign::gen_keypair();
+
+        Config::clear_paired_viewers();
+        Config::set_option(
+            keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST.to_owned(),
+            "N".to_owned(),
+        );
+        Config::set_option(
+            keys::OPTION_REMEMBER_PAIRED_VIEWERS.to_owned(),
+            "Y".to_owned(),
+        );
+        crate::common::pin_trusted_peer_signing_key(&peer_id, &peer_config_id, &trusted_sign_pk.0)
+            .unwrap();
+        crate::common::set_confirmed_rendezvous_paired_viewer(&peer_config_id, true);
+
+        let refused_interface = TestInterface::new(&peer_config_id, None);
+        let (addr, signed_id_pk, handle) = spawn_secure_handshake_peer(
+            peer_id.clone(),
+            trusted_sign_pk.0,
+            trusted_sign_sk.clone(),
+            rs_sk.clone(),
+            Some("server-secret".to_owned()),
+        )
+        .await
+        .unwrap();
+        let mut conn = connect_tcp_local(addr.clone(), None, CONNECT_TIMEOUT)
+            .await
+            .unwrap();
+        let err = Client::secure_connection(
+            &peer_id,
+            &peer_id,
+            &peer_config_id,
+            signed_id_pk,
+            &crate::common::encode64(rs_pk.0),
+            &refused_interface,
+            &mut conn,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("pairing passphrase required"));
+        assert!(refused_interface
+            .pairing_requests
+            .lock()
+            .unwrap()
+            .is_empty());
+        assert!(!crate::common::has_confirmed_rendezvous_paired_viewer(
+            &peer_config_id
+        ));
+        let _ = handle.await;
+
+        let retry_interface = TestInterface::new(&peer_config_id, Some("server-secret"));
+        let (addr, signed_id_pk, handle) = spawn_secure_handshake_peer(
+            peer_id.clone(),
+            trusted_sign_pk.0,
+            trusted_sign_sk,
+            rs_sk,
+            Some("server-secret".to_owned()),
+        )
+        .await
+        .unwrap();
+        let mut conn = connect_tcp_local(addr.clone(), None, CONNECT_TIMEOUT)
+            .await
+            .unwrap();
+        let pk = Client::secure_connection(
+            &peer_id,
+            &peer_id,
+            &peer_config_id,
+            signed_id_pk,
+            &crate::common::encode64(rs_pk.0),
+            &retry_interface,
+            &mut conn,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(pk, trusted_sign_pk.0.to_vec());
+        assert_eq!(retry_interface.pairing_requests.lock().unwrap().len(), 1);
+        assert!(crate::common::has_confirmed_rendezvous_paired_viewer(
+            &peer_config_id
+        ));
+        handle.await.unwrap().unwrap();
+
+        PeerConfig::remove(&peer_config_id);
+        Config::clear_paired_viewers();
+        Config::set_option(
+            keys::OPTION_ALLOW_UNVERIFIED_PEER_TRUST.to_owned(),
+            saved_allow,
+        );
+        Config::set_option(
+            keys::OPTION_REMEMBER_PAIRED_VIEWERS.to_owned(),
+            saved_remember,
+        );
+    }
+
+    #[tokio::test]
+    async fn test_start_retries_once_after_rendezvous_pairing_was_cleared() {
+        let _guard = TEST_CLIENT_SECURITY_LOCK.lock().unwrap();
+        let peer_config_id = format!("secure-config-{}", Uuid::new_v4());
+        let attempts = Arc::new(Mutex::new(0usize));
+
+        crate::common::set_confirmed_rendezvous_paired_viewer(&peer_config_id, true);
+        let result = Client::retry_after_cleared_rendezvous_pairing(&peer_config_id, || {
+            let attempts = attempts.clone();
+            let peer_config_id = peer_config_id.clone();
+            async move {
+                let mut attempts = attempts.lock().unwrap();
+                *attempts += 1;
+                if *attempts == 1 {
+                    crate::common::set_confirmed_rendezvous_paired_viewer(&peer_config_id, false);
+                    bail!("Handshake failed: pairing passphrase required");
+                }
+                Ok("retried")
+            }
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(result, "retried");
+        assert_eq!(*attempts.lock().unwrap(), 2);
+        PeerConfig::remove(&peer_config_id);
     }
 }
 
