@@ -6,4 +6,4 @@ publish = false
 description = "Dynamic loading wrapper for libxdo-sys that doesn't require libxdo at compile/link time"
 
 [dependencies]
-hbb_common = { path = "../hbb_common" }
+hbb_common = { path = "../../../hbb_common" }

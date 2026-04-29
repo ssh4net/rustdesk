@@ -324,7 +324,7 @@ pub enum Data {
     /// Empty data is supported. The IPC connection uses `BytesCodec` with `raw=false` (default),
     /// which prefixes each frame with a length header. So `send_raw(Bytes::new())` sends a
     /// 1-byte frame (length=0), and `next_raw()` correctly returns an empty `BytesMut`.
-    /// See `libs/hbb_common/src/bytes_codec.rs` test `test_codec2` for verification.
+    /// See `../hbb_common/src/bytes_codec.rs` test `test_codec2` for verification.
     FileBlockFromCM {
         id: i32,
         file_num: i32,
