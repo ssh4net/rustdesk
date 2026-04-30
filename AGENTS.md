@@ -38,17 +38,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - `src/platform/` - Platform-specific code
 - **`flutter/`** - Flutter UI code for desktop and mobile
 - **`libs/`** - Core libraries
-  - `libs/hbb_common/` - Video codec, config, network wrapper, protobuf, file transfer utilities
   - `libs/scrap/` - Screen capture functionality
   - `libs/enigo/` - Platform-specific keyboard/mouse control
   - `libs/clipboard/` - Cross-platform clipboard implementation
+- **`../hbb_common/`** - Shared protocol, config, network wrapper, protobuf, and file transfer utilities used by client and server
 
 ### Key Components
 - **Remote Desktop Protocol**: Custom protocol implemented in `src/rendezvous_mediator.rs` for communicating with rustdesk-server
 - **Screen Capture**: Platform-specific screen capture in `libs/scrap/`
 - **Input Handling**: Cross-platform input simulation in `libs/enigo/`
 - **Audio/Video Services**: Real-time audio/video streaming in `src/server/`
-- **File Transfer**: Secure file transfer implementation in `libs/hbb_common/`
+- **File Transfer**: Secure file transfer implementation in `../hbb_common/`
 
 ### UI Architecture
 - **Legacy UI**: Sciter-based (deprecated) - files in `src/ui/`
@@ -84,7 +84,7 @@ When working with files, ignore these directories:
 - `screencapturekit` - macOS ScreenCaptureKit (macOS only)
 
 ### Config
-All configurations or options are under `libs/hbb_common/src/config.rs` file, 4 types:
+All configurations or options are under `../hbb_common/src/config.rs` file, 4 types:
 - Settings
 - Local
 - Display
