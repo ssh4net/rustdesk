@@ -1674,6 +1674,11 @@ impl Connection {
                 self.send(msg_out).await;
             }
 
+            #[cfg(windows)]
+            {
+                crate::platform::windows::log_lock_screen_state("connection-login");
+                super::display_service::log_windows_displays("connection-login");
+            }
             try_activate_screen();
 
             match super::display_service::update_get_sync_displays_on_login().await {

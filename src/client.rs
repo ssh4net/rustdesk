@@ -3631,6 +3631,16 @@ fn activate_os(interface: &impl Interface, send_left_click: bool) {
     */
 }
 
+fn send_show_sign_in_key(interface: &impl Interface) {
+    let mut key_event = KeyEvent::new();
+    key_event.mode = KeyboardMode::Legacy.into();
+    key_event.press = true;
+    key_event.set_control_key(ControlKey::Return);
+    let mut msg_out = Message::new();
+    msg_out.set_key_event(key_event);
+    interface.send(Data::Message(msg_out));
+}
+
 /// Input the OS's password.
 ///
 /// # Arguments
@@ -3655,6 +3665,12 @@ fn _input_os_password(p: String, activate: bool, interface: impl Interface) {
     let input_password = !p.is_empty();
     if activate {
         // Click event is used to bring up the password input box.
+        if !input_password && crate::keyboard::get_peer_platform() == "Windows" {
+            activate_os(&interface, true);
+            std::thread::sleep(Duration::from_millis(150));
+            send_show_sign_in_key(&interface);
+            return;
+        }
         activate_os(&interface, input_password);
         std::thread::sleep(Duration::from_millis(1200));
     }
