@@ -8,6 +8,9 @@ Usage: scripts/build_macos.sh [--clean] [--hwcodec] [--screencapturekit] [--skip
 Environment overrides:
   RUSTDESK_FLUTTER_ROOT       Flutter SDK root. Default: first flutter in PATH
   RUSTDESK_MACOS_CODEC_ROOT   Native dependency prefix. Optional
+  RUSTDESK_MACOS_SIGN_IDENTITY  Signing identity to use for the app bundle. Optional
+  RUSTDESK_MACOS_DEVELOPMENT_TEAM Development team to pass to Xcode. Optional
+  RUSTDESK_MACOS_ADHOC_SIGN   Set to 1 to force ad-hoc signing fallback. Default: 0
   PUB_CACHE                   Dart package cache. Default: $HOME/.pub-cache-rustdesk-macos
   CARGO_TARGET_DIR            Cargo output dir. Default: ../rustdesk-target-macos
 USAGE
@@ -33,6 +36,8 @@ done
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 flutter_dir="$repo_root/flutter"
 default_codec_root="$repo_root/.local/macos-codecs"
+app_bundle="$flutter_dir/build/macos/Build/Products/Release/RustDesk.app"
+adhoc_sign="${RUSTDESK_MACOS_ADHOC_SIGN:-0}"
 
 if [[ -n "${RUSTDESK_FLUTTER_ROOT:-}" ]]; then
   export PATH="$RUSTDESK_FLUTTER_ROOT/bin:$PATH"
@@ -84,17 +89,30 @@ if [[ "$skip_cargo" -eq 0 ]]; then
   (cd "$repo_root" && MACOSX_DEPLOYMENT_TARGET=10.15 cargo build --features "$features" --lib --release)
 fi
 
+release_entitlements="$flutter_dir/macos/Runner/Release.entitlements"
+if [[ "$adhoc_sign" == "1" ]]; then
+  release_entitlements="$flutter_dir/macos/Runner/ReleaseAdhoc.entitlements"
+fi
+
 host_arch="$(uname -m)"
 if [[ "$host_arch" == "arm64" || "$host_arch" == "x86_64" ]]; then
   (
     cd "$flutter_dir"
     flutter build macos --release --config-only
-    xcodebuild -workspace macos/Runner.xcworkspace \
-      -scheme Runner \
-      -configuration Release \
-      -derivedDataPath build/macos \
-      -destination "platform=macOS,arch=$host_arch" \
-      build
+    xcodebuild_args=(
+      -workspace macos/Runner.xcworkspace
+      -scheme Runner
+      -configuration Release
+      -derivedDataPath build/macos
+      -destination "platform=macOS,arch=$host_arch"
+    )
+    if [[ -n "${RUSTDESK_MACOS_DEVELOPMENT_TEAM:-}" ]]; then
+      xcodebuild_args+=("DEVELOPMENT_TEAM=$RUSTDESK_MACOS_DEVELOPMENT_TEAM")
+    fi
+    if [[ -n "${RUSTDESK_MACOS_SIGN_IDENTITY:-}" ]]; then
+      xcodebuild_args+=("CODE_SIGN_IDENTITY=$RUSTDESK_MACOS_SIGN_IDENTITY")
+    fi
+    xcodebuild "${xcodebuild_args[@]}" build
   )
 else
   (cd "$flutter_dir" && flutter build macos --release)
@@ -102,12 +120,29 @@ fi
 
 if [[ -f "$repo_root/target/release/service" ]]; then
   cp -f "$repo_root/target/release/service" \
-    "$flutter_dir/build/macos/Build/Products/Release/RustDesk.app/Contents/MacOS/"
+    "$app_bundle/Contents/MacOS/"
 fi
 
-codesign --force --deep --sign - --options runtime \
-  --entitlements "$flutter_dir/macos/Runner/Release.entitlements" \
-  "$flutter_dir/build/macos/Build/Products/Release/RustDesk.app"
+if [[ "$adhoc_sign" == "1" ]]; then
+  sign_identity="-"
+else
+  sign_identity="${RUSTDESK_MACOS_SIGN_IDENTITY:-}"
+  if [[ -z "$sign_identity" ]]; then
+    sign_identity="$(codesign -dv "$app_bundle" 2>&1 | sed -n 's/^Authority=//p' | head -1)"
+  fi
+  if [[ -z "$sign_identity" ]]; then
+    cat >&2 <<EOF
+Unable to determine a valid signing identity for $app_bundle.
+Set RUSTDESK_MACOS_SIGN_IDENTITY and optionally RUSTDESK_MACOS_DEVELOPMENT_TEAM,
+or set RUSTDESK_MACOS_ADHOC_SIGN=1 to use the local ad-hoc signing fallback.
+EOF
+    exit 1
+  fi
+fi
+
+codesign --force --deep --sign "$sign_identity" --options runtime \
+  --entitlements "$release_entitlements" \
+  "$app_bundle"
 
 echo "macOS bundle:"
 echo "$flutter_dir/build/macos/Build/Products/Release"
