@@ -60,8 +60,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Important Build Notes
 
 ### Dependencies
-- Requires vcpkg for C++ dependencies: `libvpx`, `libyuv`, `opus`, `aom`
-- Set `VCPKG_ROOT` environment variable
+- This RustAdmin fork does not use vcpkg as the default dependency manager and prefers to avoid it for project work.
+- Prefer explicit system packages, native SDKs, CMake/pkg-config prefixes, or local WSL build prefixes for C/C++ dependencies.
+- Existing upstream docs/scripts may still mention vcpkg as a RustDesk compatibility option, but do not introduce new required vcpkg build steps unless the user explicitly asks for them.
+- Some upstream build logic may still read `VCPKG_ROOT`; when unavoidable, treat it only as a compatibility prefix variable, not as a requirement to run vcpkg.
 - Download appropriate Sciter library for legacy UI support
 
 ### Ignore Patterns

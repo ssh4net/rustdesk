@@ -10,7 +10,7 @@ pub const CLIPBOARD_NAME: &'static str = "clipboard";
 #[cfg(feature = "unix-file-copy-paste")]
 pub const FILE_CLIPBOARD_NAME: &'static str = "file-clipboard";
 pub const CLIPBOARD_INTERVAL: u64 = 333;
-const LOCAL_CLIPBOARD_PROTECT_DUR: Duration = Duration::from_secs(5);
+const LOCAL_CLIPBOARD_QUIET_DUR: Duration = Duration::from_millis(750);
 
 // This format is used to store the flag in the clipboard.
 const RUSTDESK_CLIPBOARD_OWNER_FORMAT: &'static str = "dyn.com.rustdesk.owner";
@@ -53,22 +53,27 @@ impl ClipboardTiming {
         self.last_remote_apply_at = Some(now);
     }
 
-    fn should_defer_remote_update(&self, now: Instant) -> bool {
+    fn remote_update_delay(&self, now: Instant) -> Option<Duration> {
         let Some(local_change_at) = self.last_local_change_at else {
-            return false;
+            return None;
         };
         if self
             .last_remote_apply_at
             .is_some_and(|remote_apply_at| local_change_at <= remote_apply_at)
         {
-            return false;
+            return None;
         }
-        now.saturating_duration_since(local_change_at) < LOCAL_CLIPBOARD_PROTECT_DUR
+        let elapsed = now.saturating_duration_since(local_change_at);
+        if elapsed < LOCAL_CLIPBOARD_QUIET_DUR {
+            Some(LOCAL_CLIPBOARD_QUIET_DUR - elapsed)
+        } else {
+            None
+        }
     }
 }
 
 #[cfg(not(target_os = "android"))]
-fn mark_local_clipboard_change(side: ClipboardSide) {
+pub(crate) fn mark_local_clipboard_change(side: ClipboardSide) {
     CLIPBOARD_TIMING
         .lock()
         .unwrap()
@@ -86,18 +91,26 @@ fn mark_remote_clipboard_applied(side: ClipboardSide) {
 }
 
 #[cfg(not(target_os = "android"))]
-fn should_defer_remote_clipboard_update(side: ClipboardSide) -> bool {
-    let defer = CLIPBOARD_TIMING
+fn remote_clipboard_update_delay(side: ClipboardSide) -> Option<Duration> {
+    let delay = CLIPBOARD_TIMING
         .lock()
         .unwrap()
-        .should_defer_remote_update(Instant::now());
-    if defer {
+        .remote_update_delay(Instant::now());
+    if let Some(delay) = delay {
         log::debug!(
-            "Skip updating {} clipboard because the local clipboard changed recently",
-            side
+            "Delay updating {} clipboard for {:?} because the local clipboard changed recently",
+            side,
+            delay
         );
     }
-    defer
+    delay
+}
+
+#[cfg(not(target_os = "android"))]
+fn keep_text_only(data: Vec<ClipboardData>) -> Vec<ClipboardData> {
+    data.into_iter()
+        .filter(|c| matches!(c, ClipboardData::Text(_)))
+        .collect()
 }
 
 #[cfg(not(target_os = "android"))]
@@ -117,10 +130,9 @@ const SUPPORTED_FORMATS: &[ClipboardFormat] = &[
 #[cfg(target_os = "windows")]
 mod platform_clipboard {
     use hbb_common::{bail, log, ResultType};
-    use std::{ffi::OsStr, os::windows::ffi::OsStrExt, ptr::null_mut, thread, time::Duration};
+    use std::{ptr::null_mut, thread, time::Duration};
     use winapi::um::winuser::{
-        CloseClipboard, EnumClipboardFormats, GetClipboardFormatNameW, IsClipboardFormatAvailable,
-        OpenClipboard, RegisterClipboardFormatW,
+        CloseClipboard, EnumClipboardFormats, GetClipboardFormatNameW, OpenClipboard,
     };
 
     const CF_TEXT: u32 = 1;
@@ -161,10 +173,6 @@ mod platform_clipboard {
         }
     }
 
-    fn wide_z(value: &str) -> Vec<u16> {
-        OsStr::new(value).encode_wide().chain(Some(0)).collect()
-    }
-
     fn open_clipboard() -> ResultType<ClipboardGuard> {
         for _ in 0..5 {
             // Safety: Passing a null HWND opens the clipboard for the current task.
@@ -174,12 +182,6 @@ mod platform_clipboard {
             thread::sleep(Duration::from_millis(5));
         }
         bail!("clipboard is occupied");
-    }
-
-    fn registered_id(name: &str) -> u32 {
-        let name = wide_z(name);
-        // Safety: wide_z returns a valid null-terminated UTF-16 string.
-        unsafe { RegisterClipboardFormatW(name.as_ptr()) }
     }
 
     fn registered_name(format: u32) -> Option<String> {
@@ -245,13 +247,6 @@ mod platform_clipboard {
         Ok(false)
     }
 
-    pub fn has_rustdesk_owner() -> bool {
-        let format = registered_id(super::RUSTDESK_CLIPBOARD_OWNER_FORMAT);
-        // Safety: IsClipboardFormatAvailable accepts a registered format id without
-        // requiring the clipboard to be opened by this process.
-        format != 0 && unsafe { IsClipboardFormatAvailable(format) != 0 }
-    }
-
     pub fn has_risky_formats() -> bool {
         match contains_risky_formats() {
             Ok(has_risky) => has_risky,
@@ -260,17 +255,6 @@ mod platform_clipboard {
                 false
             }
         }
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-mod platform_clipboard {
-    pub fn has_rustdesk_owner() -> bool {
-        false
-    }
-
-    pub fn has_risky_formats() -> bool {
-        false
     }
 }
 
@@ -433,8 +417,15 @@ fn update_clipboard_(multi_clipboards: Vec<Clipboard>, side: ClipboardSide) {
 
 #[cfg(not(target_os = "android"))]
 fn do_update_clipboard_(mut to_update_data: Vec<ClipboardData>, side: ClipboardSide) {
-    if should_defer_remote_clipboard_update(side) {
-        return;
+    if let Some(delay) = remote_clipboard_update_delay(side) {
+        std::thread::sleep(delay);
+        if remote_clipboard_update_delay(side).is_some() {
+            log::debug!(
+                "Skip delayed {} clipboard update because a newer local clipboard change was observed",
+                side
+            );
+            return;
+        }
     }
     let mut ctx = CLIPBOARD_CTX.lock().unwrap();
     if ctx.is_none() {
@@ -544,14 +535,21 @@ impl ClipboardContext {
     }
 
     pub fn get(&mut self, side: ClipboardSide, force: bool) -> ResultType<Vec<ClipboardData>> {
-        if platform_clipboard::has_risky_formats() {
-            log::debug!(
-                "Skip synchronizing clipboard on {} because it contains unsupported native formats",
-                side
-            );
-            return Ok(vec![]);
-        }
         let data = self.get_formats_filter(SUPPORTED_FORMATS, side, force)?;
+        #[cfg(target_os = "windows")]
+        let data = {
+            let mut filtered = data;
+            if platform_clipboard::has_risky_formats() {
+                filtered = keep_text_only(filtered);
+                if filtered.is_empty() {
+                    log::debug!(
+                        "Skip synchronizing non-text clipboard on {} because it contains unsupported native formats",
+                        side
+                    );
+                }
+            }
+            filtered
+        };
         // We have a separate service named `file-clipboard` to handle file copy-paste.
         // We need to read the file urls because file copy may set the other clipboard formats such as text.
         #[cfg(feature = "unix-file-copy-paste")]
@@ -616,9 +614,6 @@ impl ClipboardContext {
 
     fn set(&mut self, data: &[ClipboardData]) -> ResultType<()> {
         let _lock = ARBOARD_MTX.lock().unwrap();
-        if platform_clipboard::has_risky_formats() && !platform_clipboard::has_rustdesk_owner() {
-            bail!("refusing to overwrite clipboard with unsupported native formats");
-        }
         self.inner.set_formats(data)?;
         Ok(())
     }
@@ -782,34 +777,50 @@ mod clipboard_timing_tests {
     use super::*;
 
     #[test]
-    fn recent_local_change_defers_remote_update() {
-        let now = Instant::now();
+    fn recent_local_change_delays_remote_update() {
+        let start = Instant::now();
+        let now = start + Duration::from_millis(100);
         let mut timing = ClipboardTiming::default();
 
-        timing.mark_local_change(now - Duration::from_secs(1));
+        timing.mark_local_change(start);
 
-        assert!(timing.should_defer_remote_update(now));
+        assert!(timing.remote_update_delay(now).is_some());
     }
 
     #[test]
     fn expired_local_change_allows_remote_update() {
-        let now = Instant::now();
+        let start = Instant::now();
+        let now = start + LOCAL_CLIPBOARD_QUIET_DUR + Duration::from_millis(1);
         let mut timing = ClipboardTiming::default();
 
-        timing.mark_local_change(now - LOCAL_CLIPBOARD_PROTECT_DUR - Duration::from_secs(1));
+        timing.mark_local_change(start);
 
-        assert!(!timing.should_defer_remote_update(now));
+        assert!(timing.remote_update_delay(now).is_none());
     }
 
     #[test]
     fn remote_apply_after_local_change_allows_next_remote_update() {
-        let now = Instant::now();
+        let start = Instant::now();
+        let now = start + Duration::from_millis(300);
         let mut timing = ClipboardTiming::default();
 
-        timing.mark_local_change(now - Duration::from_secs(2));
-        timing.mark_remote_apply(now - Duration::from_secs(1));
+        timing.mark_local_change(start + Duration::from_millis(100));
+        timing.mark_remote_apply(start + Duration::from_millis(200));
 
-        assert!(!timing.should_defer_remote_update(now));
+        assert!(timing.remote_update_delay(now).is_none());
+    }
+
+    #[test]
+    fn risky_native_clipboard_keeps_plain_text() {
+        let data = vec![
+            ClipboardData::Text("hello".to_owned()),
+            ClipboardData::Html("<b>hello</b>".to_owned()),
+        ];
+
+        let kept = keep_text_only(data);
+
+        assert_eq!(kept.len(), 1);
+        assert!(matches!(&kept[0], ClipboardData::Text(text) if text == "hello"));
     }
 }
 
