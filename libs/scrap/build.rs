@@ -123,7 +123,6 @@ fn local_codec_roots() -> Vec<PathBuf> {
     roots
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn local_codec_lib_name(name: &str) -> &str {
     match name {
         "libyuv" => "yuv",

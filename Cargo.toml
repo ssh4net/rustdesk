@@ -188,6 +188,8 @@ dbus-crossroads = "0.5"
 pam = { git="https://github.com/rustdesk-org/pam" }
 x11-clipboard = {git="https://github.com/clslaid/x11-clipboard", branch = "feat/store-batch", optional = true}
 x11rb =  {version = "0.12", features = ["all-extensions"], optional = true}
+x11rb_clipboard = { package = "x11rb", version = "0.13" }
+wl-clipboard-rs = "0.9"
 percent-encoding = {version = "2.3", optional = true}
 once_cell = {version = "1.18", optional = true}
 nix = { version = "0.29", features = ["term", "process"]}

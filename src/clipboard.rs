@@ -18,6 +18,75 @@ const RUSTDESK_CLIPBOARD_OWNER_FORMAT: &'static str = "dyn.com.rustdesk.owner";
 // Add special format for Excel XML Spreadsheet
 const CLIPBOARD_FORMAT_EXCEL_XML_SPREADSHEET: &'static str = "XML Spreadsheet";
 
+#[cfg(any(test, target_os = "windows", target_os = "macos", target_os = "linux"))]
+const SAFE_REGISTERED_FORMATS: &[&str] = &[
+    "TARGETS",
+    "SAVE_TARGETS",
+    "TIMESTAMP",
+    "MULTIPLE",
+    "UTF8_STRING",
+    "TEXT",
+    "STRING",
+    "COMPOUND_TEXT",
+    "HTML Format",
+    "Rich Text Format",
+    "text/richtext",
+    "text/rtf",
+    "text/html",
+    "text/plain",
+    "text/plain;charset=utf-8",
+    "text/uri-list",
+    "image/png",
+    "image/tiff",
+    "PNG",
+    "image/svg+xml",
+    "public.utf8-plain-text",
+    "public.text",
+    "public.html",
+    "public.rtf",
+    "public.png",
+    "public.tiff",
+    "public.svg-image",
+    "public.file-url",
+    "NSStringPboardType",
+    "NSRTFPboardType",
+    "NSHTMLPboardType",
+    "NSFilenamesPboardType",
+    "NSURLPboardType",
+    "Chromium Web Custom MIME Data Format",
+    "WebKit Smart Paste Format",
+    "UniformResourceLocator",
+    "UniformResourceLocatorW",
+    "DataObjectAttributes",
+    "CanIncludeInClipboardHistory",
+    "CanUploadToCloudClipboard",
+    "ExcludeClipboardContentFromMonitorProcessing",
+    CLIPBOARD_FORMAT_EXCEL_XML_SPREADSHEET,
+    RUSTDESK_CLIPBOARD_OWNER_FORMAT,
+];
+
+#[cfg(any(test, target_os = "windows", target_os = "macos", target_os = "linux"))]
+const OPAQUE_NATIVE_FORMAT_PATTERNS: &[&str] = &[
+    "adobe illustrator",
+    "illustrator",
+    "aicb",
+    "ai private",
+    "com.adobe",
+    "portable document format",
+    "application/pdf",
+    "application/postscript",
+    "application/eps",
+    "application/vnd.adobe.illustrator",
+    "application/x-adobe-illustrator",
+    "pdf",
+    "public.pdf",
+    "public.eps",
+    "public.postscript",
+    "encapsulated postscript",
+    "postscript",
+    "eps",
+];
+
 #[cfg(not(target_os = "android"))]
 lazy_static::lazy_static! {
     static ref ARBOARD_MTX: Arc<Mutex<()>> = Arc::new(Mutex::new(()));
@@ -106,11 +175,45 @@ fn remote_clipboard_update_delay(side: ClipboardSide) -> Option<Duration> {
     delay
 }
 
-#[cfg(not(target_os = "android"))]
-fn keep_text_only(data: Vec<ClipboardData>) -> Vec<ClipboardData> {
-    data.into_iter()
-        .filter(|c| matches!(c, ClipboardData::Text(_)))
-        .collect()
+#[cfg(any(test, target_os = "windows", target_os = "macos", target_os = "linux"))]
+fn contains_ignore_ascii_case(value: &str, needle: &str) -> bool {
+    value
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
+}
+
+#[cfg(any(test, target_os = "windows", target_os = "macos", target_os = "linux"))]
+fn is_safe_registered_format_name(name: &str) -> bool {
+    SAFE_REGISTERED_FORMATS
+        .iter()
+        .any(|safe| safe.eq_ignore_ascii_case(name))
+}
+
+#[cfg(any(test, target_os = "windows", target_os = "macos", target_os = "linux"))]
+fn is_opaque_native_format_name(name: &str) -> bool {
+    OPAQUE_NATIVE_FORMAT_PATTERNS
+        .iter()
+        .any(|pattern| contains_ignore_ascii_case(name, pattern))
+}
+
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
+fn is_risky_native_format_name(name: &str) -> bool {
+    if is_safe_registered_format_name(name) {
+        return false;
+    }
+    let name = name.trim();
+    contains_ignore_ascii_case(name, "application/")
+        || contains_ignore_ascii_case(name, "public.")
+        || contains_ignore_ascii_case(name, "com.adobe")
+        || contains_ignore_ascii_case(name, "org.inkscape")
+        || contains_ignore_ascii_case(name, "gimp")
+        || contains_ignore_ascii_case(name, "libreoffice")
+}
+
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
+fn should_preserve_native_format_name(name: &str) -> bool {
+    is_opaque_native_format_name(name) || is_risky_native_format_name(name)
 }
 
 #[cfg(not(target_os = "android"))]
@@ -130,9 +233,10 @@ const SUPPORTED_FORMATS: &[ClipboardFormat] = &[
 #[cfg(target_os = "windows")]
 mod platform_clipboard {
     use hbb_common::{bail, log, ResultType};
-    use std::{ptr::null_mut, thread, time::Duration};
+    use std::{ffi::OsStr, os::windows::ffi::OsStrExt, ptr::null_mut, thread, time::Duration};
     use winapi::um::winuser::{
-        CloseClipboard, EnumClipboardFormats, GetClipboardFormatNameW, OpenClipboard,
+        CloseClipboard, EnumClipboardFormats, GetClipboardFormatNameW, IsClipboardFormatAvailable,
+        OpenClipboard, RegisterClipboardFormatW,
     };
 
     const CF_TEXT: u32 = 1;
@@ -147,20 +251,6 @@ mod platform_clipboard {
     const CF_HDROP: u32 = 15;
     const CF_LOCALE: u32 = 16;
     const CF_DIBV5: u32 = 17;
-
-    const SAFE_REGISTERED_FORMATS: &[&str] = &[
-        "HTML Format",
-        "Rich Text Format",
-        "text/richtext",
-        "image/png",
-        "PNG",
-        "image/svg+xml",
-        super::CLIPBOARD_FORMAT_EXCEL_XML_SPREADSHEET,
-        super::RUSTDESK_CLIPBOARD_OWNER_FORMAT,
-        "CanIncludeInClipboardHistory",
-        "CanUploadToCloudClipboard",
-        "ExcludeClipboardContentFromMonitorProcessing",
-    ];
 
     struct ClipboardGuard;
 
@@ -184,6 +274,16 @@ mod platform_clipboard {
         bail!("clipboard is occupied");
     }
 
+    fn wide_z(value: &str) -> Vec<u16> {
+        OsStr::new(value).encode_wide().chain(Some(0)).collect()
+    }
+
+    fn registered_id(name: &str) -> u32 {
+        let name = wide_z(name);
+        // Safety: wide_z returns a valid null-terminated UTF-16 string.
+        unsafe { RegisterClipboardFormatW(name.as_ptr()) }
+    }
+
     fn registered_name(format: u32) -> Option<String> {
         let mut name = [0u16; 256];
         // Safety: name is a writable UTF-16 buffer and len matches its capacity.
@@ -193,12 +293,6 @@ mod platform_clipboard {
         } else {
             Some(String::from_utf16_lossy(&name[..len as usize]))
         }
-    }
-
-    fn is_safe_registered_name(name: &str) -> bool {
-        SAFE_REGISTERED_FORMATS
-            .iter()
-            .any(|safe| safe.eq_ignore_ascii_case(name))
     }
 
     fn is_safe_predefined(format: u32) -> bool {
@@ -215,7 +309,7 @@ mod platform_clipboard {
         )
     }
 
-    fn is_risky_format(format: u32) -> bool {
+    fn is_opaque_native_format(format: u32) -> bool {
         if matches!(
             format,
             CF_HDROP | CF_METAFILEPICT | CF_TIFF | CF_ENHMETAFILE
@@ -227,11 +321,14 @@ mod platform_clipboard {
         }
         registered_name(format)
             .as_deref()
-            .map(|name| !is_safe_registered_name(name))
+            .map(|name| {
+                !super::is_safe_registered_format_name(name)
+                    || super::is_opaque_native_format_name(name)
+            })
             .unwrap_or(true)
     }
 
-    fn contains_risky_formats() -> ResultType<bool> {
+    fn contains_opaque_native_formats() -> ResultType<bool> {
         let _clipboard = open_clipboard()?;
         let mut format = 0;
         loop {
@@ -240,18 +337,273 @@ mod platform_clipboard {
             if format == 0 {
                 break;
             }
-            if is_risky_format(format) {
+            if is_opaque_native_format(format) {
                 return Ok(true);
             }
         }
         Ok(false)
     }
 
-    pub fn has_risky_formats() -> bool {
-        match contains_risky_formats() {
-            Ok(has_risky) => has_risky,
+    pub fn has_rustdesk_owner() -> bool {
+        let format = registered_id(super::RUSTDESK_CLIPBOARD_OWNER_FORMAT);
+        // Safety: IsClipboardFormatAvailable accepts a registered format id without
+        // requiring the clipboard to be opened by this process.
+        format != 0 && unsafe { IsClipboardFormatAvailable(format) != 0 }
+    }
+
+    pub fn has_opaque_native_formats() -> bool {
+        match contains_opaque_native_formats() {
+            Ok(has_opaque) => has_opaque,
             Err(e) => {
                 log::debug!("Failed to inspect clipboard formats: {}", e);
+                false
+            }
+        }
+    }
+
+    pub fn has_external_opaque_native_formats() -> bool {
+        !has_rustdesk_owner() && has_opaque_native_formats()
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod platform_clipboard {
+    use cocoa::{
+        appkit::{NSPasteboard, NSPasteboardItem},
+        base::{id, nil},
+        foundation::{NSArray, NSString},
+    };
+    use hbb_common::{bail, log, ResultType};
+    use std::ffi::CStr;
+
+    unsafe fn nsstring_to_string(value: id) -> Option<String> {
+        if value == nil {
+            return None;
+        }
+        // Safety: Cocoa returns a null-terminated UTF-8 view for NSString.
+        let bytes = unsafe { NSString::UTF8String(value) };
+        if bytes.is_null() {
+            None
+        } else {
+            // Safety: bytes is valid for the lifetime of the Objective-C object.
+            Some(
+                unsafe { CStr::from_ptr(bytes) }
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        }
+    }
+
+    unsafe fn append_type_names(types: id, names: &mut Vec<String>) {
+        if types == nil {
+            return;
+        }
+        // Safety: types is an NSArray returned by NSPasteboard APIs.
+        let count = unsafe { NSArray::count(types) };
+        names.reserve(count as usize);
+        for index in 0..count {
+            // Safety: index is below count and NSArray elements are NSString instances.
+            let value = unsafe { NSArray::objectAtIndex(types, index) };
+            if let Some(name) = unsafe { nsstring_to_string(value) } {
+                names.push(name);
+            }
+        }
+    }
+
+    fn pasteboard_type_names() -> ResultType<Vec<String>> {
+        let mut names = Vec::new();
+        unsafe {
+            // Safety: generalPasteboard is an AppKit singleton and does not require ownership.
+            let pasteboard = NSPasteboard::generalPasteboard(nil);
+            if pasteboard == nil {
+                bail!("failed to get macOS general pasteboard");
+            }
+            // Prefer item-local types because vector editors often attach native
+            // formats to pasteboard items while still publishing plain fallbacks.
+            let items = NSPasteboard::pasteboardItems(pasteboard);
+            if items != nil {
+                let count = NSArray::count(items);
+                for index in 0..count {
+                    let item = NSArray::objectAtIndex(items, index);
+                    let types = NSPasteboardItem::types(item);
+                    append_type_names(types, &mut names);
+                }
+            }
+            if names.is_empty() {
+                append_type_names(NSPasteboard::types(pasteboard), &mut names);
+            }
+        }
+        Ok(names)
+    }
+
+    fn contains_external_opaque_native_formats() -> ResultType<bool> {
+        let names = pasteboard_type_names()?;
+        let has_owner = names
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(super::RUSTDESK_CLIPBOARD_OWNER_FORMAT));
+        Ok(!has_owner
+            && names
+                .iter()
+                .any(|name| super::should_preserve_native_format_name(name)))
+    }
+
+    pub fn has_external_opaque_native_formats() -> bool {
+        match contains_external_opaque_native_formats() {
+            Ok(has_opaque) => has_opaque,
+            Err(e) => {
+                log::debug!("Failed to inspect macOS clipboard types: {}", e);
+                false
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod platform_clipboard {
+    use hbb_common::{bail, log, ResultType};
+    use std::{
+        thread,
+        time::{Duration, Instant},
+    };
+    use wl_clipboard_rs::paste::{get_mime_types, ClipboardType, Seat};
+    use x11rb_clipboard::{
+        connection::Connection,
+        protocol::{
+            xproto::{Atom, AtomEnum, ConnectionExt as _, CreateWindowAux, EventMask, WindowClass},
+            Event,
+        },
+        rust_connection::RustConnection,
+        COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, CURRENT_TIME, NONE,
+    };
+
+    const X11_TARGET_WAIT_DUR: Duration = Duration::from_millis(250);
+    const X11_TARGET_POLL_DUR: Duration = Duration::from_millis(5);
+    const X11_CLIPBOARD_ATOM: &str = "CLIPBOARD";
+    const X11_TARGETS_ATOM: &str = "TARGETS";
+    const X11_TARGET_PROPERTY_ATOM: &str = "RUSTDESK_CLIPBOARD_TARGETS";
+
+    fn wayland_type_names() -> Option<Vec<String>> {
+        if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+            return None;
+        }
+        match get_mime_types(ClipboardType::Regular, Seat::Unspecified) {
+            Ok(names) => Some(names.into_iter().collect()),
+            Err(e) => {
+                log::debug!("Failed to inspect Wayland clipboard MIME types: {}", e);
+                None
+            }
+        }
+    }
+
+    fn intern_atom(conn: &RustConnection, name: &str) -> ResultType<Atom> {
+        Ok(conn.intern_atom(false, name.as_bytes())?.reply()?.atom)
+    }
+
+    fn atom_name(conn: &RustConnection, atom: Atom) -> ResultType<String> {
+        Ok(String::from_utf8(conn.get_atom_name(atom)?.reply()?.name)?)
+    }
+
+    fn read_x11_target_names(
+        conn: &RustConnection,
+        win: u32,
+        clipboard: Atom,
+        targets: Atom,
+        property: Atom,
+    ) -> ResultType<Vec<String>> {
+        conn.convert_selection(win, clipboard, targets, property, CURRENT_TIME)?;
+        conn.flush()?;
+
+        let deadline = Instant::now() + X11_TARGET_WAIT_DUR;
+        loop {
+            if Instant::now() >= deadline {
+                bail!("timed out waiting for X11 clipboard TARGETS");
+            }
+            if let Some(event) = conn.poll_for_event()? {
+                let Event::SelectionNotify(event) = event else {
+                    continue;
+                };
+                if event.requestor != win || event.selection != clipboard || event.target != targets
+                {
+                    continue;
+                }
+                if event.property == NONE {
+                    return Ok(Vec::new());
+                }
+                let reply = conn
+                    .get_property(true, win, property, AtomEnum::ATOM, 0, 4096)?
+                    .reply()?;
+                let Some(atoms) = reply.value32() else {
+                    return Ok(Vec::new());
+                };
+                let mut names = Vec::with_capacity(reply.value_len as usize);
+                for atom in atoms {
+                    names.push(atom_name(conn, atom)?);
+                }
+                return Ok(names);
+            }
+            thread::sleep(X11_TARGET_POLL_DUR);
+        }
+    }
+
+    fn x11_type_names() -> ResultType<Vec<String>> {
+        let (conn, screen_num) = RustConnection::connect(None)?;
+        let screen = conn
+            .setup()
+            .roots
+            .get(screen_num)
+            .ok_or_else(|| hbb_common::anyhow::anyhow!("no X11 screen found"))?;
+        let win = conn.generate_id()?;
+        conn.create_window(
+            COPY_DEPTH_FROM_PARENT,
+            win,
+            screen.root,
+            0,
+            0,
+            1,
+            1,
+            0,
+            WindowClass::COPY_FROM_PARENT,
+            COPY_FROM_PARENT,
+            &CreateWindowAux::new().event_mask(EventMask::PROPERTY_CHANGE),
+        )?;
+        conn.flush()?;
+
+        let clipboard = intern_atom(&conn, X11_CLIPBOARD_ATOM)?;
+        let owner = conn.get_selection_owner(clipboard)?.reply()?.owner;
+        if owner == NONE {
+            let _ = conn.destroy_window(win);
+            return Ok(Vec::new());
+        }
+        let targets = intern_atom(&conn, X11_TARGETS_ATOM)?;
+        let property = intern_atom(&conn, X11_TARGET_PROPERTY_ATOM)?;
+        let result = read_x11_target_names(&conn, win, clipboard, targets, property);
+        let _ = conn.destroy_window(win);
+        result
+    }
+
+    fn clipboard_type_names() -> ResultType<Vec<String>> {
+        if let Some(names) = wayland_type_names() {
+            return Ok(names);
+        }
+        x11_type_names()
+    }
+
+    fn contains_external_opaque_native_formats() -> ResultType<bool> {
+        let names = clipboard_type_names()?;
+        let has_owner = names
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(super::RUSTDESK_CLIPBOARD_OWNER_FORMAT));
+        Ok(!has_owner
+            && names
+                .iter()
+                .any(|name| super::should_preserve_native_format_name(name)))
+    }
+
+    pub fn has_external_opaque_native_formats() -> bool {
+        match contains_external_opaque_native_formats() {
+            Ok(has_opaque) => has_opaque,
+            Err(e) => {
+                log::debug!("Failed to inspect Linux clipboard types: {}", e);
                 false
             }
         }
@@ -536,20 +888,16 @@ impl ClipboardContext {
 
     pub fn get(&mut self, side: ClipboardSide, force: bool) -> ResultType<Vec<ClipboardData>> {
         let data = self.get_formats_filter(SUPPORTED_FORMATS, side, force)?;
-        #[cfg(target_os = "windows")]
-        let data = {
-            let mut filtered = data;
-            if platform_clipboard::has_risky_formats() {
-                filtered = keep_text_only(filtered);
-                if filtered.is_empty() {
-                    log::debug!(
-                        "Skip synchronizing non-text clipboard on {} because it contains unsupported native formats",
-                        side
-                    );
-                }
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+        {
+            if !data.is_empty() && platform_clipboard::has_external_opaque_native_formats() {
+                log::debug!(
+                    "Skip synchronizing {} clipboard because it contains opaque native formats",
+                    side
+                );
+                return Ok(vec![]);
             }
-            filtered
-        };
+        }
         // We have a separate service named `file-clipboard` to handle file copy-paste.
         // We need to read the file urls because file copy may set the other clipboard formats such as text.
         #[cfg(feature = "unix-file-copy-paste")]
@@ -614,6 +962,10 @@ impl ClipboardContext {
 
     fn set(&mut self, data: &[ClipboardData]) -> ResultType<()> {
         let _lock = ARBOARD_MTX.lock().unwrap();
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+        if platform_clipboard::has_external_opaque_native_formats() {
+            bail!("refusing to overwrite clipboard with opaque native formats");
+        }
         self.inner.set_formats(data)?;
         Ok(())
     }
@@ -811,16 +1163,58 @@ mod clipboard_timing_tests {
     }
 
     #[test]
-    fn risky_native_clipboard_keeps_plain_text() {
-        let data = vec![
-            ClipboardData::Text("hello".to_owned()),
-            ClipboardData::Html("<b>hello</b>".to_owned()),
-        ];
+    fn adobe_vector_formats_are_opaque() {
+        for name in [
+            "Adobe Illustrator Document",
+            "AICB",
+            "AI Private Data",
+            "Portable Document Format",
+            "application/pdf",
+            "application/vnd.adobe.illustrator",
+            "public.pdf",
+            "public.postscript",
+            "Encapsulated PostScript",
+            "EPS",
+        ] {
+            assert!(is_opaque_native_format_name(name), "{name}");
+        }
+    }
 
-        let kept = keep_text_only(data);
+    #[test]
+    fn common_text_and_web_formats_are_not_opaque() {
+        for name in [
+            "HTML Format",
+            "Rich Text Format",
+            "text/plain",
+            "text/plain;charset=utf-8",
+            "Chromium Web Custom MIME Data Format",
+            "WebKit Smart Paste Format",
+            "public.utf8-plain-text",
+            "public.html",
+            "TARGETS",
+            RUSTDESK_CLIPBOARD_OWNER_FORMAT,
+        ] {
+            assert!(is_safe_registered_format_name(name), "{name}");
+            assert!(!is_opaque_native_format_name(name), "{name}");
+            assert!(!should_preserve_native_format_name(name), "{name}");
+        }
+    }
 
-        assert_eq!(kept.len(), 1);
-        assert!(matches!(&kept[0], ClipboardData::Text(text) if text == "hello"));
+    #[test]
+    fn risky_desktop_native_formats_are_preserved() {
+        for name in [
+            "application/vnd.oasis.opendocument.text",
+            "public.rtf",
+            "public.pdf",
+            "com.adobe.illustrator.aicb",
+            "org.inkscape.output",
+        ] {
+            if name == "public.rtf" {
+                assert!(!should_preserve_native_format_name(name), "{name}");
+            } else {
+                assert!(should_preserve_native_format_name(name), "{name}");
+            }
+        }
     }
 }
 
