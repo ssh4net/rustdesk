@@ -4,9 +4,9 @@ use crate::{
     ui_interface::{get_local_option, set_local_option},
 };
 use bytes::Bytes;
-use parity_tokio_ipc::{
-    Connection as Conn, ConnectionClient as ConnClient, Endpoint, Incoming, SecurityAttributes,
-};
+use parity_tokio_ipc::{Connection as Conn, ConnectionClient as ConnClient, Endpoint, Incoming};
+#[cfg(windows)]
+use parity_tokio_ipc::SecurityAttributes;
 use serde_derive::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -477,8 +477,9 @@ pub async fn new_listener(postfix: &str) -> ResultType<Incoming> {
     #[cfg(not(any(windows, target_os = "android", target_os = "ios")))]
     check_pid(postfix).await;
     let mut endpoint = Endpoint::new(path.clone());
-    #[cfg(not(windows))]
-    endpoint.set_security_attributes(SecurityAttributes::empty().set_mode(0o600)?);
+    // parity-tokio-ipc applies Unix permissions before bind(), so setting them
+    // here makes new sockets fail with ENOENT. Permissions are applied after
+    // bind() below by set_ipc_path_permissions().
     #[cfg(windows)]
     if ipc_allows_everyone_create(postfix) {
         match SecurityAttributes::allow_everyone_create() {
