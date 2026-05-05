@@ -14,6 +14,7 @@ Environment overrides:
   RUSTDESK_MACOS_ADHOC_SIGN   Set to 1 to force ad-hoc signing fallback. Default: 0
   PUB_CACHE                   Dart package cache. Default: $HOME/.pub-cache-rustdesk-macos
   CARGO_TARGET_DIR            Cargo output dir. Default: ../rustdesk-target-macos
+                              Synced to target/release for Xcode embedding.
 USAGE
 }
 
@@ -51,6 +52,10 @@ fi
 
 export PUB_CACHE="${PUB_CACHE:-$HOME/.pub-cache-rustdesk-macos}"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$(cd "$repo_root/.." && pwd)/rustdesk-target-macos}"
+cargo_release_dir="$CARGO_TARGET_DIR/release"
+xcode_rust_release_dir="$repo_root/target/release"
+xcode_librustdesk="$xcode_rust_release_dir/liblibrustdesk.dylib"
+xcode_service="$xcode_rust_release_dir/service"
 
 if [[ -z "${RUSTDESK_MACOS_CODEC_ROOT:-}" ]]; then
   if [[ -d "$default_codec_root" ]]; then
@@ -67,6 +72,63 @@ if [[ -n "${RUSTDESK_MACOS_CODEC_ROOT:-}" ]]; then
 fi
 
 mkdir -p "$PUB_CACHE" "$CARGO_TARGET_DIR"
+
+sync_macos_rust_artifacts() {
+  local cargo_librustdesk="$cargo_release_dir/liblibrustdesk.dylib"
+  local cargo_service="$cargo_release_dir/service"
+
+  if [[ ! -f "$cargo_librustdesk" ]]; then
+    echo "Missing Rust library: $cargo_librustdesk" >&2
+    echo "Run without --skip-cargo or set CARGO_TARGET_DIR to a directory containing a release build." >&2
+    exit 1
+  fi
+
+  mkdir -p "$xcode_rust_release_dir"
+  local cargo_release_real
+  local xcode_release_real
+  cargo_release_real="$(cd "$cargo_release_dir" && pwd -P)"
+  xcode_release_real="$(cd "$xcode_rust_release_dir" && pwd -P)"
+  if [[ "$cargo_release_real" != "$xcode_release_real" ]]; then
+    echo "Syncing Rust library for Xcode: $cargo_librustdesk -> $xcode_librustdesk"
+    cp -f "$cargo_librustdesk" "$xcode_librustdesk"
+    if [[ -f "$cargo_service" ]]; then
+      cp -f "$cargo_service" "$xcode_service"
+    fi
+  fi
+}
+
+generate_version_file() {
+  local version
+  local revision
+  local revision_file="$repo_root/../hbb_common/rustadmin_revision.txt"
+  local version_file="$repo_root/src/version.rs"
+
+  version="$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$repo_root/Cargo.toml" | head -n 1)"
+  if [[ -z "$version" ]]; then
+    echo "Could not read package version from $repo_root/Cargo.toml" >&2
+    exit 1
+  fi
+  if [[ ! -f "$revision_file" ]]; then
+    echo "Missing RustAdmin revision file: $revision_file" >&2
+    exit 1
+  fi
+  revision="$(tr -d '[:space:]' < "$revision_file")"
+  if [[ -z "$revision" ]]; then
+    echo "RustAdmin revision file is empty: $revision_file" >&2
+    exit 1
+  fi
+
+  cat > "$version_file" <<EOF
+#[allow(dead_code)]
+pub const VERSION: &str = "$version";
+#[allow(dead_code)]
+pub const RUSTADMIN_REVISION: &str = "$revision";
+#[allow(dead_code)]
+pub const FULL_VERSION: &str = "$version rev $revision";
+#[allow(dead_code)]
+pub const BUILD_DATE: &str = "$(date '+%Y-%m-%d %H:%M')";
+EOF
+}
 
 package_config="$flutter_dir/.dart_tool/package_config.json"
 if [[ "$clean" -eq 1 ]] ||
@@ -87,8 +149,11 @@ if [[ "$screencapturekit" -eq 1 ]]; then
 fi
 
 if [[ "$skip_cargo" -eq 0 ]]; then
-  (cd "$repo_root" && MACOSX_DEPLOYMENT_TARGET=10.15 cargo build --features "$features" --lib --release)
+  generate_version_file
+  (cd "$repo_root" && MACOSX_DEPLOYMENT_TARGET=10.15 cargo build --features "$features" --release)
 fi
+
+sync_macos_rust_artifacts
 
 release_entitlements="$flutter_dir/macos/Runner/Release.entitlements"
 if [[ "$adhoc_sign" == "1" ]]; then
@@ -131,8 +196,8 @@ else
   (cd "$flutter_dir" && flutter build macos --release)
 fi
 
-if [[ -f "$repo_root/target/release/service" ]]; then
-  cp -f "$repo_root/target/release/service" \
+if [[ -f "$xcode_service" ]]; then
+  cp -f "$xcode_service" \
     "$app_bundle/Contents/MacOS/"
 fi
 
