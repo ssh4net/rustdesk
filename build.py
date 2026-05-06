@@ -45,6 +45,35 @@ def system2(cmd):
         sys.exit(-1)
 
 
+def sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def assert_same_file(src, dst, label):
+    src = Path(src)
+    dst = Path(dst)
+    if not src.exists():
+        sys.stderr.write(f"Missing source {label}: {src}\n")
+        sys.exit(-1)
+    if not dst.exists():
+        sys.stderr.write(f"Missing bundled {label}: {dst}\n")
+        sys.exit(-1)
+    src_hash = sha256_file(src)
+    dst_hash = sha256_file(dst)
+    if src_hash != dst_hash:
+        sys.stderr.write(
+            f"Bundled {label} is stale or different:\n"
+            f"  source: {src} {src_hash}\n"
+            f"  bundle: {dst} {dst_hash}\n"
+        )
+        sys.exit(-1)
+    print(f"Verified bundled {label}: {dst}")
+
+
 def get_version():
     with open("Cargo.toml", encoding="utf-8") as fh:
         for line in fh:
@@ -448,8 +477,16 @@ def build_flutter_windows(version, features, skip_portable_pack):
     os.chdir('flutter')
     system2('flutter build windows --release')
     os.chdir('..')
+    assert_same_file(
+        'target/release/librustdesk.dll',
+        Path(flutter_build_dir_2) / 'librustdesk.dll',
+        'librustdesk.dll')
     shutil.copy2('target/release/deps/dylib_virtual_display.dll',
                  flutter_build_dir_2)
+    assert_same_file(
+        'target/release/deps/dylib_virtual_display.dll',
+        Path(flutter_build_dir_2) / 'dylib_virtual_display.dll',
+        'dylib_virtual_display.dll')
     if skip_portable_pack:
         return
     os.chdir('libs/portable')
