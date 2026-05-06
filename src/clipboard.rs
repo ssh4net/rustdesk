@@ -272,6 +272,16 @@ fn debug_clipboard_data(label: &str, side: ClipboardSide, data: &[ClipboardData]
 }
 
 #[cfg(not(target_os = "android"))]
+fn plain_text_clipboard_data(data: &[ClipboardData]) -> Option<Vec<ClipboardData>> {
+    data.iter().find_map(|item| match item {
+        ClipboardData::Text(text) if !text.is_empty() => {
+            Some(vec![ClipboardData::Text(text.clone())])
+        }
+        _ => None,
+    })
+}
+
+#[cfg(not(target_os = "android"))]
 const SUPPORTED_FORMATS: &[ClipboardFormat] = &[
     ClipboardFormat::Text,
     ClipboardFormat::Html,
@@ -1046,9 +1056,17 @@ impl ClipboardContext {
         #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
         {
             platform_clipboard::debug_dump_clipboard_formats("get-before-native-guard");
-            if !data.is_empty() && platform_clipboard::has_external_opaque_native_formats() {
+            if platform_clipboard::has_external_opaque_native_formats() {
+                if let Some(text_data) = plain_text_clipboard_data(&data) {
+                    log::debug!(
+                        "Transferring only plain text from {} clipboard because it also contains opaque native formats",
+                        side
+                    );
+                    return Ok(text_data);
+                }
+                mark_local_clipboard_change(side);
                 log::debug!(
-                    "Skip synchronizing {} clipboard because it contains opaque native formats",
+                    "Skip transferring {} clipboard because it contains opaque native formats",
                     side
                 );
                 return Ok(vec![]);
@@ -1122,10 +1140,6 @@ impl ClipboardContext {
         #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
         {
             platform_clipboard::debug_dump_clipboard_formats("set-before-native-guard");
-        }
-        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-        if platform_clipboard::has_external_opaque_native_formats() {
-            bail!("refusing to overwrite clipboard with opaque native formats");
         }
         self.inner.set_formats(data)?;
         Ok(())
@@ -1376,6 +1390,30 @@ mod clipboard_timing_tests {
                 assert!(should_preserve_native_format_name(name), "{name}");
             }
         }
+    }
+
+    #[test]
+    fn plain_text_clipboard_data_extracts_text_only() {
+        let data = vec![
+            ClipboardData::Html("<b>secret</b>".to_owned()),
+            ClipboardData::Text("secret".to_owned()),
+            ClipboardData::Special(("Native Private Format".to_owned(), vec![1, 2, 3])),
+        ];
+
+        let text_data = plain_text_clipboard_data(&data).unwrap();
+
+        assert_eq!(text_data.len(), 1);
+        assert!(matches!(&text_data[0], ClipboardData::Text(text) if text == "secret"));
+    }
+
+    #[test]
+    fn plain_text_clipboard_data_rejects_data_without_text() {
+        let data = vec![
+            ClipboardData::Html("<b>secret</b>".to_owned()),
+            ClipboardData::Special(("Native Private Format".to_owned(), vec![1, 2, 3])),
+        ];
+
+        assert!(plain_text_clipboard_data(&data).is_none());
     }
 }
 

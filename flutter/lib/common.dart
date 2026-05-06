@@ -2089,6 +2089,12 @@ Future<bool> restoreWindowPosition(WindowType type,
       case WindowType.Main:
         // Center the main window only if no position is saved (on first run).
         if (isWindows || isLinux) {
+          if (isWindows) {
+            // Window restore on Windows stores physical pixels.
+            final size = await _adjustRestoreMainWindowSize(null, null);
+            await windowManager.setSize(size,
+                ignoreDevicePixelRatio: _ignoreDevicePixelRatio);
+          }
           await windowManager.center();
         }
         // For MacOS, the window is already centered by default.
@@ -2134,6 +2140,8 @@ Future<bool> restoreWindowPosition(WindowType type,
 
   switch (type) {
     case WindowType.Main:
+      final restoreMaximized = lpos.isMaximized == true &&
+          !(bind.isIncomingOnly() || bind.isOutgoingOnly());
       restorePos() async {
         if (offsetLeftTop == null) {
           await windowManager.center();
@@ -2142,13 +2150,13 @@ Future<bool> restoreWindowPosition(WindowType type,
               ignoreDevicePixelRatio: _ignoreDevicePixelRatio);
         }
       }
-      if (lpos.isMaximized == true) {
+      if (restoreMaximized) {
         await restorePos();
-        if (!(bind.isIncomingOnly() || bind.isOutgoingOnly())) {
-          await windowManager.maximize();
-        }
+        await windowManager.maximize();
       } else {
-        final storeSize = !bind.isIncomingOnly() || bind.isOutgoingOnly();
+        final storeSize = !bind.isIncomingOnly() ||
+            bind.isOutgoingOnly() ||
+            lpos.isMaximized == true;
         if (isWindows) {
           if (storeSize) {
             // We need to set the window size first to avoid the incorrect size in some special cases.
